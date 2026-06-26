@@ -1,26 +1,20 @@
-"""Subscription and plan management."""
+"""Subscription service: plans, grant/extend premium."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.constants import (
-    PLAN_LIFETIME_DAYS,
-    PLAN_MONTHLY_DAYS,
-    PLAN_YEARLY_DAYS,
-)
-from src.database.models.payment import Payment, Plan, Subscription
-from src.exceptions import NotFoundError, ValidationError
+from src.database.models.subscription import Plan, Subscription
+from src.database.models.user import User
 
 
 class SubscriptionService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    # Plans
     async def create_plan(
         self,
         code: str,
@@ -28,7 +22,6 @@ class SubscriptionService:
         price: float,
         duration_days: int,
         currency: str = "UZS",
-        description: Optional[str] = None,
     ) -> Plan:
         plan = Plan(
             code=code,
@@ -36,168 +29,75 @@ class SubscriptionService:
             price=price,
             currency=currency,
             duration_days=duration_days,
-            description=description,
         )
         self.session.add(plan)
         await self.session.commit()
         await self.session.refresh(plan)
         return plan
 
-    async def get_plan(self, code: str) -> Plan:
-        res = await self.session.execute(select(Plan).where(Plan.code == code, Plan.is_active == True))
-        plan = res.scalar_one_or_none()
-        if not plan:
-            raise NotFoundError(f"Plan {code} not found")
-        return plan
+    async def get_plan(self, code: str) -> Optional[Plan]:
+        result = await self.session.execute(select(Plan).where(Plan.code == code, Plan.is_active == True))
+        return result.scalar_one_or_none()
 
     async def list_plans(self) -> list[Plan]:
-        res = await self.session.execute(select(Plan).where(Plan.is_active == True).order_by(Plan.price))
-        return list(res.scalars().all())
-
-    async def deactivate_plan(self, code: str) -> None:
-        plan = await self.get_plan(code)
-        plan.is_active = False
-        await self.session.commit()
-
-    # Subscriptions
-    async def subscribe(
-        self,
-        user_id: int,
-        plan_code: str,
-        payment_id: Optional[int] = None,
-    ) -> Subscription:
-        plan = await self.get_plan(plan_code)
-        now = datetime.utcnow()
-        # Check for active subscription
-        res = await self.session.execute(
-            select(Subscription).where(
-                Subscription.user_id == user_id,
-                Subscription.is_active == True,
-                Subscription.ends_at > now,
-            )
+        result = await self.session.execute(
+            select(Plan).where(Plan.is_active == True).order_by(Plan.price)
         )
-        existing = res.scalar_one_or_none()
-        if existing:
-            # Extend
-            existing.ends_at = existing.ends_at + timedelta(days=plan.duration_days)
-            existing.plan_id = plan.id
-            await self.session.commit()
-            return existing
+        return list(result.scalars())
 
+    async def grant_premium(self, user_id: int, days: int, plan_code: str | None = None) -> User:
+        user = await self.session.get(User, user_id)
+        if not user:
+            raise ValueError("user not found")
+        now = datetime.utcnow()
+        base = user.premium_until if (user.is_premium and user.premium_until and user.premium_until > now) else now
+        new_until = base + timedelta(days=days)
+        user.is_premium = True
+        user.premium_until = new_until
         sub = Subscription(
             user_id=user_id,
-            plan_id=plan.id,
-            starts_at=now,
-            ends_at=now + timedelta(days=plan.duration_days),
-            is_active=True,
-            payment_id=payment_id,
+            plan_code=plan_code or "custom",
+            started_at=now,
+            expires_at=new_until,
+            status="active",
         )
         self.session.add(sub)
         await self.session.commit()
-        await self.session.refresh(sub)
+        await self.session.refresh(user)
+        return user
 
-        # Mirror onto user table
-        from src.database.models.user import User
-
+    async def revoke_premium(self, user_id: int) -> None:
         user = await self.session.get(User, user_id)
-        if user:
-            user.is_premium = True
-            user.premium_until = sub.ends_at
-            await self.session.commit()
-        return sub
-
-    async def cancel(self, user_id: int) -> None:
-        now = datetime.utcnow()
-        res = await self.session.execute(
-            select(Subscription).where(
-                Subscription.user_id == user_id,
-                Subscription.is_active == True,
-            )
-        )
-        for sub in res.scalars().all():
-            sub.is_active = False
-            sub.cancelled_at = now
-        await self.session.commit()
-
-        from src.database.models.user import User
-
-        user = await self.session.get(User, user_id)
-        if user and user.is_premium and user.premium_until and user.premium_until <= now:
-            user.is_premium = False
-            user.premium_until = None
-            await self.session.commit()
-
-    async def is_active(self, user_id: int) -> bool:
-        now = datetime.utcnow()
-        res = await self.session.execute(
-            select(func.count(Subscription.id)).where(
-                Subscription.user_id == user_id,
-                Subscription.is_active == True,
-                Subscription.ends_at > now,
-            )
-        )
-        return bool(res.scalar_one())
-
-    async def active_for(self, user_id: int) -> Optional[Subscription]:
-        now = datetime.utcnow()
-        res = await self.session.execute(
-            select(Subscription).where(
-                Subscription.user_id == user_id,
-                Subscription.is_active == True,
-                Subscription.ends_at > now,
-            )
-        )
-        return res.scalar_one_or_none()
-
-    async def history(self, user_id: int, limit: int = 20) -> list[Subscription]:
-        res = await self.session.execute(
-            select(Subscription)
-            .where(Subscription.user_id == user_id)
-            .order_by(Subscription.created_at.desc())
-            .limit(limit)
-        )
-        return list(res.scalars().all())
-
-    async def expiring_soon(self, days: int = 3) -> list[Subscription]:
-        now = datetime.utcnow()
-        threshold = now + timedelta(days=days)
-        res = await self.session.execute(
-            select(Subscription).where(
-                Subscription.is_active == True,
-                Subscription.ends_at.between(now, threshold),
-            )
-        )
-        return list(res.scalars().all())
-
-    async def cleanup_expired(self) -> int:
-        now = datetime.utcnow()
-        from sqlalchemy import update
-
-        result = await self.session.execute(
-            update(Subscription)
-            .where(Subscription.is_active == True, Subscription.ends_at <= now)
-            .values(is_active=False)
-        )
-        await self.session.commit()
-        return result.rowcount or 0
-
-    # Seed default plans
-    async def ensure_default_plans(self) -> None:
-        existing = await self.session.execute(select(Plan).limit(1))
-        if existing.scalar_one_or_none():
+        if not user:
             return
-
-        defaults = [
-            ("monthly", "Monthly", 19900, PLAN_MONTHLY_DAYS, "UZS"),
-            ("quarterly", "Quarterly", 49900, 90, "UZS"),
-            ("yearly", "Yearly", 179900, PLAN_YEARLY_DAYS, "UZS"),
-            ("lifetime", "Lifetime", 499900, PLAN_LIFETIME_DAYS, "UZS"),
-        ]
-        for code, name, price, days, cur in defaults:
-            self.session.add(Plan(code=code, name=name, price=price, duration_days=days, currency=cur))
+        user.is_premium = False
+        user.premium_until = None
         await self.session.commit()
 
+    async def extend_premium(self, user_id: int, days: int) -> User:
+        return await self.grant_premium(user_id, days)
 
-subscription_service = None
+    async def get_active_subscription(self, user_id: int) -> Optional[Subscription]:
+        result = await self.session.execute(
+            select(Subscription)
+            .where(Subscription.user_id == user_id, Subscription.status == "active")
+            .order_by(Subscription.expires_at.desc())
+        )
+        return result.scalar_one_or_none()
 
-__all__ = ["SubscriptionService", "subscription_service"]
+    async def deactivate_expired(self) -> int:
+        """Cron job: mark expired subscriptions as inactive. Returns count."""
+        now = datetime.utcnow()
+        result = await self.session.execute(
+            select(User).where(User.is_premium == True, User.premium_until <= now)
+        )
+        users = list(result.scalars())
+        for u in users:
+            u.is_premium = False
+            u.premium_until = None
+        if users:
+            await self.session.commit()
+        return len(users)
+
+
+__all__ = ["SubscriptionService"]
