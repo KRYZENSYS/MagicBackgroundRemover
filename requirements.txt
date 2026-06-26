@@ -1,47 +1,48 @@
 # Core
 aiogram==3.13.1
 aiohttp==3.10.10
-fastapi==0.115.4
-uvicorn[standard]==0.32.0
+aiosqlite==0.20.0
+python-dotenv==1.0.1
 pydantic==2.9.2
 pydantic-settings==2.6.1
-python-dotenv==1.0.1
 
-# Database
-aiosqlite==0.20.0
-SQLAlchemy[asyncio]==2.0.36
-asyncpg==0.30.0
-
-# AI / ML
+# AI / Image
 rembg==2.0.59
-onnxruntime==1.19.2
 Pillow==10.4.0
-numpy==2.1.3
+onnxruntime==1.19.2
 opencv-python-headless==4.10.0.84
-real-esrgan==0.3.0
-gfpgan==1.3.8
+numpy==1.26.4
 
-# Cache / Queue
+# API
+fastapi==0.115.4
+uvicorn[standard]==0.32.0
+python-multipart==0.0.17
+
+# Cache & Queue
 redis==5.2.0
 celery==5.4.0
 
-# Utils
-aiofiles==24.1.0
-tenacity==9.0.0
-httpx==0.27.2
-python-dateutil==2.9.0
-pytz==2024.2
+# Database (PostgreSQL/MySQL ready)
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+aiomysql==0.2.0
+
+# Security
+bcrypt==4.2.0
+cryptography==43.0.3
 
 # Monitoring
 prometheus-client==0.21.0
 sentry-sdk==2.18.0
-psutil==6.1.0
 
-# Testing
+# Utils
+loguru==0.7.2
+python-dateutil==2.9.0
+pyyaml==6.0.2
+httpx==0.27.2
+tenacity==9.0.0
+
+# Tests
 pytest==8.3.3
 pytest-asyncio==0.24.0
 pytest-cov==6.0.0
-
-# Crypto / Payment
-pycryptodome==3.21.0
-qrcode[pil]==8.0
