@@ -1,74 +1,61 @@
-"""Multilingual notification templates (UZ/RU/EN)."""
+"""Notification text templates (multi-language)."""
 from __future__ import annotations
 
 
 class NotificationTemplates:
-    T = {
+    TEMPLATES = {
         "uz": {
-            "welcome": "👋 Assalomu alaykum, {name}!\n\n🎨 Men — rasm fon o'chiruvchi bot.\nRasm yuboring — men avtomatik fonni o'chirib beraman.\n\n💎 Premium bilan cheksiz ishlang!",
-            "daily_limit": "📊 Bugun limit tugadi: {limit}/{limit}\n\n💎 Premium bilan cheksiz ishlang:\n/premium",
-            "premium_active": "💎 Premium faollashtirildi!\n⏳ Tugash: {date}",
-            "premium_expired": "⚠️ Premium tugadi. Yangilang: /premium",
-            "payment_success": "✅ To'lov tasdiqlandi!\n💎 Premium berildi: {days} kun",
-            "referral_invite": "🎁 Sizning linkingiz:\n{link}\n\nDo'st taklif qiling — ikkovingiz +7 kun premium oling!",
-            "new_feature": "🆕 Yangi funksiya: {name}\n\n{description}",
+            "welcome": "👋 Assalomu alaykum, {name}!\n\nMen sizning rasmlaringiz uchun professional yordamchiman:\n\n✂️ Fon o'chirish\n🎨 Orqa fon bilan ishlash\n🔍 Sifatni oshirish\n📄 Pasport fotosurati\n💎 Premium imkoniyatlar\n\nBoshlamoqchimisiz? Menyudan tanlang yoki rasm yuboring.",
+            "daily_limit": "🚫 Bugungi limit tugadi ({limit} rasm).\n\n💎 Premium bilan cheksiz ishlov — /premium",
+            "premium_activated": "✅ Premium faollashtirildi!\n\nTugash: {until}",
+            "premium_expired": "⚠️ Premium muddati tugadi.\n\nYangilash: /premium",
+            "support_reply": "💬 Support javobi:\n\n{text}",
+            "broadcast": "📢 Yangilik:\n\n{text}",
         },
         "ru": {
-            "welcome": "👋 Привет, {name}!\n\n🎨 Я — бот для удаления фона с изображений.\nОтправь фото — я автоматически уберу фон.\n\n💎 С Premium без лимитов!",
-            "daily_limit": "📊 Лимит на сегодня исчерпан: {limit}/{limit}\n\n💎 С Premium без ограничений:\n/premium",
-            "premium_active": "💎 Premium активирован!\n⏳ До: {date}",
-            "premium_expired": "⚠️ Premium истек. Продлить: /premium",
-            "payment_success": "✅ Оплата подтверждена!\n💎 Premium: {days} дней",
-            "referral_invite": "🎁 Ваша ссылка:\n{link}\n\nПригласите друга — оба получите +7 дней Premium!",
-            "new_feature": "🆕 Новая функция: {name}\n\n{description}",
+            "welcome": "👋 Привет, {name}!\n\nЯ твой профессиональный помощник по изображениям:\n\n✂️ Удаление фона\n🎨 Замена фона\n🔍 Улучшение качества\n📄 Фото для паспорта\n💎 Premium возможности\n\nНачнём? Выбери пункт меню или отправь фото.",
+            "daily_limit": "🚫 Дневной лимит исчерпан ({limit} фото).\n\n💎 Premium — безлимит: /premium",
+            "premium_activated": "✅ Premium активирован!\n\nДействует до: {until}",
+            "premium_expired": "⚠️ Premium истёк.\n\nПродлить: /premium",
+            "support_reply": "💬 Ответ поддержки:\n\n{text}",
+            "broadcast": "📢 Новость:\n\n{text}",
         },
         "en": {
-            "welcome": "👋 Hi, {name}!\n\n🎨 I'm a background removal bot.\nSend me a photo — I'll auto-remove its background.\n\n💎 Unlimited with Premium!",
-            "daily_limit": "📊 Daily limit reached: {limit}/{limit}\n\n💎 Get unlimited with Premium:\n/premium",
-            "premium_active": "💎 Premium activated!\n⏳ Until: {date}",
-            "premium_expired": "⚠️ Premium expired. Renew: /premium",
-            "payment_success": "✅ Payment confirmed!\n💎 Premium: {days} days",
-            "referral_invite": "🎁 Your invite link:\n{link}\n\nInvite a friend — you both get +7 days Premium!",
-            "new_feature": "🆕 New feature: {name}\n\n{description}",
+            "welcome": "👋 Hello, {name}!\n\nI'm your professional image assistant:\n\n✂️ Background removal\n🎨 Background change\n🔍 Upscale\n📄 Passport photo\n💎 Premium features\n\nGet started — pick from the menu or send a photo.",
+            "daily_limit": "🚫 Daily limit reached ({limit} images).\n\n💎 Premium for unlimited: /premium",
+            "premium_activated": "✅ Premium activated!\n\nUntil: {until}",
+            "premium_expired": "⚠️ Premium expired.\n\nRenew: /premium",
+            "support_reply": "💬 Support reply:\n\n{text}",
+            "broadcast": "📢 News:\n\n{text}",
         },
     }
 
+    DEFAULT_LANG = "uz"
+
     @classmethod
-    def _tr(cls, key: str, lang: str, **kwargs) -> str:
-        bundle = cls.T.get(lang, cls.T["uz"])
-        template = bundle.get(key, cls.T["uz"].get(key, key))
+    def get(cls, key: str, lang: str = "uz", **kwargs) -> str:
+        lang = lang if lang in cls.TEMPLATES else cls.DEFAULT_LANG
+        template = cls.TEMPLATES[lang].get(key) or cls.TEMPLATES[cls.DEFAULT_LANG].get(key, "")
         try:
-            return template.format(**kwargs)
-        except KeyError:
+            return template.format(**kwargs) if kwargs else template
+        except Exception:
             return template
 
     @classmethod
     def welcome(cls, name: str, lang: str = "uz") -> str:
-        return cls._tr("welcome", lang, name=name)
+        return cls.get("welcome", lang, name=name)
 
     @classmethod
     def daily_limit_reached(cls, limit: int, lang: str = "uz") -> str:
-        return cls._tr("daily_limit", lang, limit=limit)
+        return cls.get("daily_limit", lang, limit=limit)
 
     @classmethod
-    def premium_active(cls, date: str, lang: str = "uz") -> str:
-        return cls._tr("premium_active", lang, date=date)
+    def premium_activated(cls, until: str, lang: str = "uz") -> str:
+        return cls.get("premium_activated", lang, until=until)
 
     @classmethod
     def premium_expired(cls, lang: str = "uz") -> str:
-        return cls._tr("premium_expired", lang)
-
-    @classmethod
-    def payment_success(cls, days: int, lang: str = "uz") -> str:
-        return cls._tr("payment_success", lang, days=days)
-
-    @classmethod
-    def referral_invite(cls, link: str, lang: str = "uz") -> str:
-        return cls._tr("referral_invite", lang, link=link)
-
-    @classmethod
-    def new_feature(cls, name: str, description: str, lang: str = "uz") -> str:
-        return cls._tr("new_feature", lang, name=name, description=description)
+        return cls.get("premium_expired", lang)
 
 
 __all__ = ["NotificationTemplates"]
