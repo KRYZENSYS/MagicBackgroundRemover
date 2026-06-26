@@ -1,79 +1,193 @@
-# MagicBackground Remover — Enterprise SAAS Platform
+# ✨ MagicBackgroundRemover
 
-Professional Telegram AI platform for background removal, image enhancement, and editing — built with 100+ features, modular architecture, and production-grade infrastructure.
+> Professional Telegram bot for AI-powered image processing.
+> Background removal, upscaling, face enhancement, passport photos, and more.
 
-## Xususiyatlar (100+)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Telegram](https://img.shields.io/badge/Telegram-%40MagicBgBot-blue)](https://t.me/MagicBgBot)
 
-### AI Capabilities
-- Background removal (HD / Ultra HD)
-- AI upscale (2x / 4x / 8x)
-- AI enhance, denoise, sharpen
-- AI face / skin / hair / edge refinement
-- AI shadow & reflection
-- AI portrait mode & background blur
-- Replace background (gradient / solid / image)
-- Passport / ID / product / e-commerce modes
-- Auto crop, center, color correction
+---
 
-### Image Tools
-- Resize, compress, rotate, flip
-- PNG/JPG/WebP conversion
-- Watermark add/remove
-- Batch processing + ZIP download
-- Metadata viewer
-- File size optimizer
+## 🎯 Features
 
-### User & Premium
-- Profile, history, presets, favorites
-- Daily limits, plans (Monthly/Yearly/Lifetime)
-- Trial, payments (Telegram Stars, Click, Payme, Stripe, Crypto)
-- Referral + promo codes
+### Image tools (free + premium)
+- ✂️ **Background removal** — U-2-Net / rembg / ISNet
+- 🎨 **Background replacement** — solid color, gradient, custom image
+- 🔍 **Upscaling** — Real-ESRGAN 2x / 4x
+- ✨ **Auto-enhance** — sharpness, contrast, color
+- 👤 **Face enhancement** — GFPGAN
+- 📄 **Passport / ID photo** — auto-crop + white background
+- 🌑 **Drop shadow** — for product photos
+- 🔖 **Watermark** — text overlay
+- 📐 **Crop / Resize / Rotate / Flip**
+- 🔄 **Format conversion** — PNG/JPG/WEBP/PDF
 
-### Admin
-- Dashboard, stats, broadcast, scheduled
-- Ban/unban/warn, logs, backups, export
-- Revenue & referral analytics
+### Business features
+- 💎 **Subscriptions** — monthly, yearly, lifetime
+- 💳 **Multi-provider payments** — Click, Payme, Stripe, Telegram Stars, Crypto
+- 🎁 **Referral program** — both referrer and referee get +7 days Premium
+- 🎫 **Promo codes** — admin-creatable, with usage limits
+- 📊 **Admin dashboard** — stats, broadcasts, user search, payments
+- 🌐 **Multi-language** — UZ, RU, EN (auto-detected)
+- 🔔 **Notifications** — premium expiry reminders, daily digests
+- 📈 **Analytics** — events, counters, retention metrics
+- 🛡 **Maintenance mode** — toggle via /admin
+- 🎯 **Sentry** error tracking
+- 🐳 **Docker** + **docker-compose** for one-line deploy
 
-### Security & Performance
-- Anti-spam/flood, rate-limit, CAPTCHA
-- Async, Redis cache, background queue
-- Health checks, error monitoring
-- Docker / Railway / Render / VPS deploy
+---
 
-## Tez start
+## 🚀 Quick Start
+
+### 1. Clone & install
 
 ```bash
 git clone https://github.com/KRYZENSYS/MagicBackgroundRemover.git
 cd MagicBackgroundRemover
+python3.11 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # BOT_TOKEN kiriting
-python -m bot
+cp .env.example .env
 ```
 
-## Struktura
+### 2. Configure `.env`
+
+```bash
+# Required
+BOT_TOKEN=...
+ADMIN_IDS=123456789
+DATABASE_URL=postgresql+asyncpg://magic:bg@db:5432/magicdb
+
+# Optional (payments)
+CLICK_MERCHANT_ID=...
+CLICK_SECRET=...
+PAYME_MERCHANT_ID=...
+PAYME_KEY=...
+STRIPE_SECRET_KEY=...
+NOWPAYMENTS_API_KEY=...
+```
+
+### 3. Run migrations
+
+```bash
+alembic upgrade head
+```
+
+### 4. Start the bot
+
+```bash
+python -m src.main
+```
+
+Or with Docker:
+```bash
+docker-compose up -d
+```
+
+---
+
+## 🏗 Architecture
 
 ```
-bot/                  # Telegram bot entry
-api/                  # REST API (FastAPI)
-core/                 # Config, security, middleware
-services/             # AI, payment, image, storage
-handlers/             # Telegram handlers
-database/             # SQLite + ORM
-keyboards/            # Inline/reply keyboards
-localization/         # i18n (UZ/RU/EN)
-utils/                # Helpers, validators
-tests/                # Pytest
-deployment/           # Docker, CI/CD
-docs/                 # Documentation
+src/
+├── bot/                  # Telegram bot (aiogram 3)
+│   ├── routers/          # start, image, premium, referral, admin, …
+│   ├── middlewares/      # DB, user, throttling, i18n
+│   ├── keyboards/        # inline + reply keyboards
+│   ├── states.py         # FSM states
+│   └── __init__.py       # dispatcher setup
+├── services/             # Business logic
+│   ├── ai/               # background removal, upscaler, enhancer
+│   ├── user/             # user + subscription services
+│   ├── payment/          # 5 provider integrations
+│   ├── analytics/        # event tracking + referral
+│   ├── admin/            # stats, broadcast, promo, plans
+│   ├── notification/     # scheduler + templates
+│   └── image/            # PIL processor + converter
+├── database/             # SQLAlchemy models + session
+├── config/               # Settings + logging
+├── api/                  # FastAPI webhooks + admin API
+├── utils/                # Helpers, exceptions
+└── main.py               # Entrypoint
 ```
 
-## Documentation
-- `docs/INSTALL.md` — O'rnatish
-- `docs/DEPLOY.md` — Deploy
-- `docs/API.md` — REST API
-- `docs/ADMIN.md` — Admin panel
-- `docs/USER.md` — User guide
-- `CHANGELOG.md` — Versiyalar
+### Data flow
 
-## License
+```
+User → Telegram → aiogram dispatcher
+                       │
+                       ▼
+              [middlewares]
+                       │
+              DB session + user + i18n
+                       │
+                       ▼
+                [router handler]
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+         [services]        [ai tools]
+              │                 │
+              ▼                 ▼
+           Database          rembg / ESRGAN / GFPGAN
+              │                 │
+              └────────┬────────┘
+                       ▼
+                  Output file
+```
+
+---
+
+## 💳 Payments
+
+| Provider  | Country      | Currency |
+|-----------|--------------|----------|
+| Click     | Uzbekistan   | UZS      |
+| Payme     | Uzbekistan   | UZS      |
+| Stripe    | International | USD     |
+| Telegram Stars | Global | XTR     |
+| Crypto (NOWPayments) | Global | USDT/BTC |
+
+---
+
+## 📊 Admin Commands
+
+```
+/admin    — open dashboard
+/stats    — quick stats
+/broadcast — send to all users
+/promo    — create promo code
+```
+
+---
+
+## 🧪 Testing
+
+```bash
+pytest -q --asyncio-mode=auto
+```
+
+---
+
+## 🛡 Production
+
+```bash
+# Build
+docker build -t magic-bg-remover:latest .
+
+# Deploy
+docker-compose up -d
+
+# Migrate
+docker exec magicbg_bot alembic upgrade head
+
+# Logs
+docker logs -f magicbg_bot
+```
+
+---
+
+## 📜 License
+
 MIT © 2026 KRYZENSYS
