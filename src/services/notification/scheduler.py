@@ -1,147 +1,114 @@
-"""Background notification scheduler (daily reminders, trial nudges)."""
+"""Notification scheduler (digest, premium expiry reminders, etc.)."""
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
-from typing import Optional
 
 from aiogram import Bot
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.config.logging import logger
 from src.database.models.user import User
 from src.database.session import async_session
-from src.services.notification.service import NotificationService
 from src.services.notification.templates import NotificationTemplates
+
+logger = logging.getLogger(__name__)
 
 
 class NotificationScheduler:
-    """Runs periodic jobs: expiring premium, daily reminders, inactive re-engagement."""
-
     def __init__(self, bot: Bot):
         self.bot = bot
-        self.notifier = NotificationService(bot)
         self._tasks: list[asyncio.Task] = []
-        self._stop = False
 
-    def start(self) -> None:
-        self._tasks = [
-            asyncio.create_task(self._run_daily_check()),
-            asyncio.create_task(self._run_premium_expiry_loop()),
-            asyncio.create_task(self._run_inactive_reengagement()),
-        ]
+    def start(self):
+        self._tasks.append(asyncio.create_task(self._expiry_reminder_loop()))
+        self._tasks.append(asyncio.create_task(self._daily_digest_loop()))
         logger.info("NotificationScheduler started with %d tasks", len(self._tasks))
 
-    async def stop(self) -> None:
-        self._stop = True
+    async def stop(self):
         for t in self._tasks:
             t.cancel()
-        for t in self._tasks:
-            try:
-                await t
-            except (asyncio.CancelledError, Exception):
-                pass
+        await asyncio.gather(*self._tasks, return_exceptions=True)
 
-    async def _run_daily_check(self) -> None:
-        """Run at 09:00 every day."""
-        while not self._stop:
-            now = datetime.utcnow()
-            target = now.replace(hour=4, minute=0, second=0, microsecond=0)  # 09:00 Tashkent
-            if now >= target:
-                target += timedelta(days=1)
-            delay = (target - now).total_seconds()
+    async def _expiry_reminder_loop(self):
+        while True:
             try:
-                await asyncio.sleep(delay)
+                await asyncio.sleep(3600)  # 1 hour
+                await self.send_premium_expiry_reminders()
             except asyncio.CancelledError:
-                return
-            await self._daily_morning_brief()
-
-    async def _daily_morning_brief(self) -> None:
-        """Push a brief message at 09:00 to premium users."""
-        async with async_session() as s:
-            from sqlalchemy import select
-            res = await s.execute(
-                select(User).where(User.is_premium == True, User.premium_until > datetime.utcnow(), User.is_banned == False)
-            )
-            users = list(res.scalars().all())
-        for u in users:
-            try:
-                msg = NotificationTemplates.welcome(u.first_name or "do'st", u.language or "uz")
-                # Shortened morning greeting
-                await self.bot.send_message(u.id, f"☀️ Xayrli kun! Bot tayyor.\n\n{msg[:200]}")
+                break
             except Exception as e:
-                logger.debug("Morning brief to %s failed: %s", u.id, e)
-            await asyncio.sleep(0.05)
+                logger.exception("expiry_reminder_loop: %s", e)
 
-    async def _run_premium_expiry_loop(self) -> None:
-        """Check every 12 hours for users whose premium expires in 3 days."""
-        while not self._stop:
-            try:
-                await self._notify_premium_expiring()
-            except Exception as e:
-                logger.exception("Premium expiry loop error: %s", e)
-            await asyncio.sleep(12 * 3600)
-
-    async def _notify_premium_expiring(self) -> None:
-        async with async_session() as s:
+    async def send_premium_expiry_reminders(self):
+        async with async_session() as session:
             now = datetime.utcnow()
             soon = now + timedelta(days=3)
-            from sqlalchemy import select
-            res = await s.execute(
+            result = await session.execute(
                 select(User).where(
                     User.is_premium == True,
-                    User.premium_until.between(now, soon),
-                    User.is_banned == False,
+                    User.premium_until.isnot(None),
+                    User.premium_until <= soon,
+                    User.premium_until > now,
+                    User.notifications_enabled == True,
                 )
             )
-            users = list(res.scalars().all())
-        for u in users:
-            try:
-                days_left = max(0, (u.premium_until - datetime.utcnow()).days)
-                msg = NotificationTemplates.premium_expiring(days_left, u.language or "uz")
-                await self.bot.send_message(u.id, msg)
-            except Exception:
-                pass
-            await asyncio.sleep(0.05)
-
-    async def _run_inactive_reengagement(self) -> None:
-        """Ping users inactive for 7+ days, max once per 14 days."""
-        while not self._stop:
-            try:
-                await self._reengage_inactive()
-            except Exception as e:
-                logger.exception("Inactive reengagement error: %s", e)
-            await asyncio.sleep(24 * 3600)
-
-    async def _reengage_inactive(self) -> None:
-        async with async_session() as s:
-            cutoff = datetime.utcnow() - timedelta(days=7)
-            cutoff_pinged = datetime.utcnow() - timedelta(days=14)
-            from sqlalchemy import select, or_
-            res = await s.execute(
-                select(User).where(
-                    User.is_banned == False,
-                    User.last_active_at < cutoff,
-                    or_(User.last_notified_at.is_(None), User.last_notified_at < cutoff_pinged),
-                ).limit(100)
-            )
-            users = list(res.scalars().all())
+            users = list(result.scalars())
         for u in users:
             try:
                 await self.bot.send_message(
                     u.id,
-                    "👋 Sizni sog'indik! Yangi funksiyalarni sinab ko'ring: /help",
+                    NotificationTemplates.premium_expired(u.language or "uz"),
                 )
-                async with async_session() as s:
-                    user = await s.get(User, u.id)
-                    if user:
-                        user.last_notified_at = datetime.utcnow()
-                        await s.commit()
-            except Exception:
-                pass
-            await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                logger.warning("expiry reminder to %s: %s", u.id, e)
+
+    async def _daily_digest_loop(self):
+        while True:
+            try:
+                now = datetime.utcnow()
+                # Sleep until 09:00 UTC
+                target = now.replace(hour=9, minute=0, second=0, microsecond=0)
+                if target <= now:
+                    target += timedelta(days=1)
+                wait = (target - now).total_seconds()
+                await asyncio.sleep(wait)
+                await self.send_daily_digest()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.exception("daily_digest_loop: %s", e)
+
+    async def send_daily_digest(self):
+        async with async_session() as session:
+            result = await session.execute(
+                select(User).where(User.notifications_enabled == True).limit(500)
+            )
+            users = list(result.scalars())
+        for u in users:
+            try:
+                await self.bot.send_message(
+                    u.id,
+                    f"🌅 Xayrli kun! Bugun yangi imkoniyatlar:\n\n"
+                    f"📊 Sizda: <b>{u.total_processed}</b> ta rasm ishlandi.\n"
+                    f"💎 Premium: {'✅' if u.is_premium else '❌'}\n\n"
+                    f"Yangi effektlar sinab ko'ring! /start",
+                )
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                logger.warning("digest to %s: %s", u.id, e)
 
 
 notification_scheduler: NotificationScheduler | None = None
 
 
-__all__ = ["NotificationScheduler", "notification_scheduler"]
+def init_scheduler(bot: Bot) -> NotificationScheduler:
+    global notification_scheduler
+    notification_scheduler = NotificationScheduler(bot)
+    notification_scheduler.start()
+    return notification_scheduler
+
+
+__all__ = ["NotificationScheduler", "init_scheduler"]
