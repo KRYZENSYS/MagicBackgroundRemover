@@ -46,7 +46,7 @@ class ImageValidator:
         try:
             img = Image.open(io.BytesIO(data))
             img.verify()
-            img = Image.open(io.BytesIO(data))  # re-open after verify
+            img = Image.open(io.BytesIO(data))
             if max(img.size) > MAX_IMAGE_DIMENSION:
                 raise InvalidFileError(f"Image too large: {img.size}. Max dim: {MAX_IMAGE_DIMENSION}")
             return ImageMeta(
@@ -64,13 +64,10 @@ class ImageValidator:
 
     @staticmethod
     def is_suspicious(data: bytes) -> bool:
-        """Heuristic checks for polyglot files / malware indicators."""
-        # Check for embedded scripts in metadata
         suspicious_signatures = [b"<script", b"<?php", b"#!/bin/", b"MZ\x90\x00"]
         for sig in suspicious_signatures:
             if sig in data[:8192]:
                 return True
-        # Very large ICC profile (could hide payload)
         if data.count(b"ICC_PROFILE") > 50:
             return True
         return False
