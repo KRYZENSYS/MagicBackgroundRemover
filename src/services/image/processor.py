@@ -1,154 +1,74 @@
-"""Generic image operations: resize, rotate, flip, crop, compress."""
+"""Generic image processing: resize, compress, rotate, flip, crop."""
 from __future__ import annotations
 
-import asyncio
 import io
-from typing import Optional
+import logging
 
 from PIL import Image
 
-from src.exceptions import ImageProcessingError
+logger = logging.getLogger(__name__)
 
 
 class ImageProcessor:
-    """All non-AI image manipulations."""
-
-    @staticmethod
     async def resize(
-        image_bytes: bytes,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
+        self,
+        img_bytes: bytes,
+        width: int | None = None,
+        height: int | None = None,
         keep_aspect: bool = True,
-        quality: int = 95,
     ) -> bytes:
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        w, h = img.size
+        if width and height and not keep_aspect:
+            new_size = (width, height)
+        elif width and not height:
+            ratio = width / w
+            new_size = (width, int(h * ratio))
+        elif height and not width:
+            ratio = height / h
+            new_size = (int(w * ratio), height)
+        else:
+            return img_bytes
+        result = img.resize(new_size, Image.LANCZOS)
+        out = io.BytesIO()
+        result.save(out, format="PNG", optimize=True)
+        return out.getvalue()
 
-            def _do():
-                w, h = img.size
-                if keep_aspect:
-                    if width and not height:
-                        ratio = width / w
-                        height = int(h * ratio)
-                    elif height and not width:
-                        ratio = height / h
-                        width = int(w * ratio)
-                    elif width and height:
-                        ratio = min(width / w, height / h)
-                        width, height = int(w * ratio), int(h * ratio)
-                else:
-                    width = width or w
-                    height = height or h
-                resized = img.resize((width, height), Image.LANCZOS)
-                buf = io.BytesIO()
-                fmt = img.format or "PNG"
-                save_kwargs = {"format": fmt}
-                if fmt.upper() in ("JPEG", "WEBP"):
-                    save_kwargs["quality"] = quality
-                resized.save(buf, **save_kwargs)
-                return buf.getvalue()
+    async def compress(self, img_bytes: bytes, quality: int = 70) -> bytes:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=quality, optimize=True)
+        return out.getvalue()
 
-            return await asyncio.to_thread(_do)
-        except Exception as e:
-            raise ImageProcessingError(f"Resize failed: {e}")
+    async def rotate(self, img_bytes: bytes, degrees: int = 90) -> bytes:
+        if degrees not in (90, 180, 270):
+            raise ValueError("degrees must be 90, 180, or 270")
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        result = img.rotate(degrees, expand=True)
+        out = io.BytesIO()
+        result.save(out, format="PNG", optimize=True)
+        return out.getvalue()
 
-    @staticmethod
-    async def rotate(image_bytes: bytes, degrees: float = 90.0, expand: bool = True) -> bytes:
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
+    async def flip(self, img_bytes: bytes, direction: str = "horizontal") -> bytes:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        if direction == "horizontal":
+            result = img.transpose(Image.FLIP_LEFT_RIGHT)
+        elif direction == "vertical":
+            result = img.transpose(Image.FLIP_TOP_BOTTOM)
+        else:
+            raise ValueError("direction must be horizontal or vertical")
+        out = io.BytesIO()
+        result.save(out, format="PNG", optimize=True)
+        return out.getvalue()
 
-            def _do():
-                out = img.rotate(-degrees, expand=expand, resample=Image.BICUBIC)
-                buf = io.BytesIO()
-                out.save(buf, format=img.format or "PNG")
-                return buf.getvalue()
-
-            return await asyncio.to_thread(_do)
-        except Exception as e:
-            raise ImageProcessingError(f"Rotate failed: {e}")
-
-    @staticmethod
-    async def flip(image_bytes: bytes, direction: str = "horizontal") -> bytes:
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-
-            def _do():
-                if direction == "horizontal":
-                    out = img.transpose(Image.FLIP_LEFT_RIGHT)
-                elif direction == "vertical":
-                    out = img.transpose(Image.FLIP_TOP_BOTTOM)
-                else:
-                    raise ValueError("direction must be horizontal or vertical")
-                buf = io.BytesIO()
-                out.save(buf, format=img.format or "PNG")
-                return buf.getvalue()
-
-            return await asyncio.to_thread(_do)
-        except Exception as e:
-            raise ImageProcessingError(f"Flip failed: {e}")
-
-    @staticmethod
-    async def crop(
-        image_bytes: bytes,
-        left: int,
-        top: int,
-        right: int,
-        bottom: int,
-    ) -> bytes:
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-
-            def _do():
-                w, h = img.size
-                left = max(0, left)
-                top = max(0, top)
-                right = min(w, right)
-                bottom = min(h, bottom)
-                if right <= left or bottom <= top:
-                    raise ImageProcessingError("Invalid crop rectangle")
-                out = img.crop((left, top, right, bottom))
-                buf = io.BytesIO()
-                out.save(buf, format=img.format or "PNG")
-                return buf.getvalue()
-
-            return await asyncio.to_thread(_do)
-        except Exception as e:
-            raise ImageProcessingError(f"Crop failed: {e}")
-
-    @staticmethod
-    async def compress(image_bytes: bytes, quality: int = 70) -> bytes:
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-
-            def _do():
-                if img.mode in ("RGBA", "P"):
-                    img2 = img.convert("RGB")
-                else:
-                    img2 = img
-                buf = io.BytesIO()
-                img2.save(buf, format="JPEG", quality=quality, optimize=True)
-                return buf.getvalue()
-
-            return await asyncio.to_thread(_do)
-        except Exception as e:
-            raise ImageProcessingError(f"Compress failed: {e}")
-
-    @staticmethod
-    async def metadata(image_bytes: bytes) -> dict:
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-            return {
-                "format": img.format,
-                "mode": img.mode,
-                "size": list(img.size),
-                "info": {k: str(v)[:500] for k, v in img.info.items() if isinstance(v, (str, int, float))},
-                "file_size": len(image_bytes),
-            }
-        except Exception as e:
-            raise ImageProcessingError(f"Metadata read failed: {e}")
+    async def crop(self, img_bytes: bytes, left: int, top: int, right: int, bottom: int) -> bytes:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        result = img.crop((left, top, right, bottom))
+        out = io.BytesIO()
+        result.save(out, format="PNG", optimize=True)
+        return out.getvalue()
 
 
 image_processor = ImageProcessor()
-
 
 __all__ = ["ImageProcessor", "image_processor"]
