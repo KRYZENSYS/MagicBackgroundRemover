@@ -1,13 +1,11 @@
-from .db import DbSessionMiddleware
+from .database import DatabaseMiddleware
 from .user import UserMiddleware
 from .throttling import ThrottlingMiddleware
-from .ban import BanCheckMiddleware
-from .analytics import AnalyticsMiddleware
+from .i18n import I18nMiddleware
 
 __all__ = [
-    "DbSessionMiddleware",
+    "DatabaseMiddleware",
     "UserMiddleware",
     "ThrottlingMiddleware",
-    "BanCheckMiddleware",
-    "AnalyticsMiddleware",
+    "I18nMiddleware",
 ]
