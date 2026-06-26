@@ -1,68 +1,65 @@
-"""Stripe payment provider."""
+"""Stripe payment provider (international)."""
 from __future__ import annotations
 
-import logging
 import time
 
-import stripe
+import aiohttp
 
+from src.config.logging import logger
 from src.config.settings import settings
-from src.services.payment.base import PaymentProvider, PaymentResult
-
-logger = logging.getLogger(__name__)
+from src.services.payment.provider import PaymentProvider, PaymentResult
 
 
 class StripeProvider(PaymentProvider):
     name = "stripe"
 
     def __init__(self):
-        stripe.api_key = settings.STRIPE_SECRET_KEY
+        self.secret = settings.STRIPE_SECRET_KEY
 
-    async def create(self, user_id: int, plan_code: str, amount: float, currency: str) -> PaymentResult:
-        if not stripe.api_key:
-            return PaymentResult(False, 0, amount, currency, {}, "Stripe not configured")
+    async def create(self, user_id: int, amount: int, plan_code: str, **kwargs) -> PaymentResult:
+        if not self.secret:
+            return PaymentResult(success=False, error="Stripe credentials not set")
+        order_id = f"stripe_{user_id}_{int(time.time())}"
+        amount_cents = amount * 100
+        url = "https://api.stripe.com/v1/checkout/sessions"
+        headers = {"Authorization": f"Bearer {self.secret}"}
+        form = {
+            "payment_method_types[]": "card",
+            "line_items[0][price_data][currency]": "usd",
+            "line_items[0][price_data][unit_amount]": str(amount_cents),
+            "line_items[0][price_data][product_data][name]": f"Premium {plan_code}",
+            "line_items[0][quantity]": "1",
+            "mode": "payment",
+            "success_url": f"{settings.WEBHOOK_BASE}/payment/stripe/success?session_id={'{CHECKOUT_SESSION_ID}'}",
+            "cancel_url": f"{settings.WEBHOOK_BASE}/payment/stripe/cancel",
+            "metadata[order_id]": order_id,
+            "metadata[user_id]": str(user_id),
+            "metadata[plan_code]": plan_code,
+        }
         try:
-            # amount in smallest currency unit (cents)
-            amount_cents = int(amount * 100)
-            session = stripe.checkout.Session.create(
-                payment_method_types=["card"],
-                line_items=[{
-                    "price_data": {
-                        "currency": currency.lower(),
-                        "product_data": {"name": f"Premium {plan_code}"},
-                        "unit_amount": amount_cents,
-                    },
-                    "quantity": 1,
-                }],
-                mode="payment",
-                success_url=settings.STRIPE_SUCCESS_URL + "?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url=settings.STRIPE_CANCEL_URL,
-                metadata={"user_id": str(user_id), "plan_code": plan_code},
-            )
-            return PaymentResult(
-                success=True,
-                payment_id=0,
-                amount=amount,
-                currency=currency,
-                payload={"pay_url": session.url, "external_id": session.id, "session_id": session.id},
-            )
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, data=form, timeout=15) as resp:
+                    data = await resp.json()
+                    if resp.status in (200, 201):
+                        return PaymentResult(
+                            success=True,
+                            payment_id=None,
+                            amount=amount,
+                            payload={"pay_url": data.get("url"), "session_id": data.get("id"), "order_id": order_id},
+                        )
+                    return PaymentResult(success=False, error=str(data))
         except Exception as e:
-            logger.exception("Stripe create error: %s", e)
-            return PaymentResult(False, 0, amount, currency, {}, str(e))
+            logger.exception("Stripe create failed: %s", e)
+            return PaymentResult(success=False, error=str(e))
 
-    async def check(self, payment_id: int) -> PaymentResult:
-        return PaymentResult(True, payment_id, 0, "", {}, "manual_check")
+    async def verify(self, payload: dict) -> bool:
+        return bool(payload.get("stripe_signature"))
 
-    async def handle_webhook(self, data: dict) -> PaymentResult:
-        try:
-            event_type = data.get("type")
-            if event_type == "checkout.session.completed":
-                obj = data.get("data", {}).get("object", {})
-                ext_id = obj.get("id")
-                return PaymentResult(True, 0, 0, "", {"external_id": ext_id, "completed": True}, "ok")
-        except Exception as e:
-            logger.exception("Stripe webhook error: %s", e)
-        return PaymentResult(False, 0, 0, "", {}, "invalid")
+    async def handle_webhook(self, body: dict) -> dict:
+        event_type = body.get("type")
+        if event_type == "checkout.session.completed":
+            return {"status": "completed", "session": body.get("data", {}).get("object", {}).get("id")}
+        return {"status": "ignored"}
 
 
 __all__ = ["StripeProvider"]
