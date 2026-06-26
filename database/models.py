@@ -1,116 +1,158 @@
-"""Database modellari"""
-import aiosqlite
+"""SQLAlchemy ORM models covering all features."""
 from datetime import datetime
-from config import DATABASE_PATH
+from sqlalchemy import String, Integer, BigInteger, Boolean, DateTime, Float, ForeignKey, Text, JSON
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from database.engine import Base
 
 
-async def init_db():
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("""CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER UNIQUE NOT NULL,
-            username TEXT, first_name TEXT, language TEXT DEFAULT 'uz',
-            join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            invited_by INTEGER, premium INTEGER DEFAULT 0,
-            banned INTEGER DEFAULT 0,
-            daily_processed INTEGER DEFAULT 0,
-            total_processed INTEGER DEFAULT 0,
-            last_process_date DATE)""")
-        await db.execute("""CREATE TABLE IF NOT EXISTS stats (
-            id INTEGER PRIMARY KEY DEFAULT 1,
-            total_users INTEGER DEFAULT 0,
-            total_processed INTEGER DEFAULT 0,
-            total_premium INTEGER DEFAULT 0,
-            CHECK (id = 1))""")
-        await db.execute("INSERT OR IGNORE INTO stats (id) VALUES (1)")
-        await db.commit()
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    language: Mapped[str] = mapped_column(String(5), default="uz")
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    theme: Mapped[str] = mapped_column(String(32), default="default")
+
+    # Subscription
+    premium: Mapped[bool] = mapped_column(Boolean, default=False)
+    premium_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    trial_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    plan_id: Mapped[int | None] = mapped_column(ForeignKey("plans.id"), nullable=True)
+
+    # Limits
+    daily_processed: Mapped[int] = mapped_column(Integer, default=0)
+    total_processed: Mapped[int] = mapped_column(Integer, default=0)
+    last_process_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Referral
+    invited_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    referral_count: Mapped[int] = mapped_column(Integer, default=0)
+    referral_earnings: Mapped[float] = mapped_column(Float, default=0.0)
+    promo_code: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
+
+    # Settings
+    notifications: Mapped[bool] = mapped_column(Boolean, default=True)
+    settings_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    favorite_tools: Mapped[list] = mapped_column(JSON, default=list)
+
+    # Moderation
+    banned: Mapped[bool] = mapped_column(Boolean, default=False)
+    warn_count: Mapped[int] = mapped_column(Integer, default=0)
+    ban_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Audit
+    join_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_active: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    images: Mapped[list["ProcessedImage"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    subscriptions: Mapped[list["Subscription"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
-async def add_user(telegram_id, username=None, first_name=None, invited_by=None):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        try:
-            await db.execute("INSERT INTO users (telegram_id, username, first_name, invited_by) VALUES (?, ?, ?, ?)", (telegram_id, username, first_name, invited_by))
-            await db.execute("UPDATE stats SET total_users = total_users + 1 WHERE id = 1")
-            await db.commit(); return True
-        except: return False
+class Plan(Base):
+    __tablename__ = "plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True)
+    name: Mapped[str] = mapped_column(String(128))
+    price: Mapped[float] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(8), default="UZS")
+    duration_days: Mapped[int] = mapped_column(Integer)
+    features: Mapped[list] = mapped_column(JSON, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_lifetime: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-async def get_user(telegram_id):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)) as c:
-            return await c.fetchone()
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id"))
+    start_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    end_date: Mapped[datetime] = mapped_column(DateTime)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    user: Mapped["User"] = relationship(back_populates="subscriptions")
 
 
-async def update_last_active(telegram_id):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE telegram_id = ?", (telegram_id,))
-        await db.commit()
+class ProcessedImage(Base):
+    __tablename__ = "processed_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tool: Mapped[str] = mapped_column(String(64))
+    options: Mapped[dict] = mapped_column(JSON, default=dict)
+    input_size: Mapped[int] = mapped_column(Integer, default=0)
+    output_size: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="images")
 
 
-async def increment_processed(telegram_id):
-    today = datetime.now().strftime("%Y-%m-%d")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("""UPDATE users SET daily_processed = CASE WHEN last_process_date = ? THEN daily_processed + 1 ELSE 1 END, last_process_date = ?, total_processed = total_processed + 1 WHERE telegram_id = ?""", (today, today, telegram_id))
-        await db.execute("UPDATE stats SET total_processed = total_processed + 1 WHERE id = 1")
-        await db.commit()
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id"))
+    amount: Mapped[float] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(8), default="UZS")
+    provider: Mapped[str] = mapped_column(String(32))  # telegram_stars, click, payme, stripe, crypto
+    transaction_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending, completed, failed, refunded
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
-async def check_daily_limit(telegram_id, limit):
-    user = await get_user(telegram_id)
-    if not user: return True
-    today = datetime.now().strftime("%Y-%m-%d")
-    if user["last_process_date"] != today: return True
-    return user["daily_processed"] < limit
+class PromoCode(Base):
+    __tablename__ = "promo_codes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    discount_percent: Mapped[int] = mapped_column(Integer, default=0)
+    bonus_days: Mapped[int] = mapped_column(Integer, default=0)
+    max_uses: Mapped[int] = mapped_column(Integer, default=1)
+    current_uses: Mapped[int] = mapped_column(Integer, default=0)
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-async def get_user_count():
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM users") as c: return (await c.fetchone())[0]
+class Broadcast(Base):
+    __tablename__ = "broadcasts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    media_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_audience: Mapped[str] = mapped_column(String(32), default="all")  # all, premium, free
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="draft")  # draft, scheduled, sent, failed
+    created_by: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-async def get_today_users():
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM users WHERE DATE(join_date) = DATE('now')") as c: return (await c.fetchone())[0]
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
 
-
-async def get_active_users(days=7):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        async with db.execute(f"SELECT COUNT(*) FROM users WHERE last_active > datetime('now', '-{days} days')") as c: return (await c.fetchone())[0]
-
-
-async def get_all_users():
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        async with db.execute("SELECT telegram_id FROM users WHERE banned = 0") as c: return [r[0] for r in await c.fetchall()]
-
-
-async def set_premium(telegram_id, days=30):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("UPDATE users SET premium = 1 WHERE telegram_id = ?", (telegram_id,))
-        await db.execute("UPDATE stats SET total_premium = total_premium + 1 WHERE id = 1")
-        await db.commit()
-
-
-async def ban_user(telegram_id):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("UPDATE users SET banned = 1 WHERE telegram_id = ?", (telegram_id,))
-        await db.commit()
-
-
-async def unban_user(telegram_id):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("UPDATE users SET banned = 0 WHERE telegram_id = ?", (telegram_id,))
-        await db.commit()
-
-
-async def get_referral_count(telegram_id):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM users WHERE invited_by = ?", (telegram_id,)) as c: return (await c.fetchone())[0]
-
-
-async def get_referral_leaderboard(limit=10):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT telegram_id, first_name, username, (SELECT COUNT(*) FROM users u2 WHERE u2.invited_by = u.telegram_id) as ref_count FROM users u ORDER BY ref_count DESC LIMIT ?", (limit,)) as c:
-            return await c.fetchall()
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
