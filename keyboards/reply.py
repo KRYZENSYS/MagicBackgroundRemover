@@ -1,8 +1,24 @@
+"""Reply keyboards (persistent menu)."""
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 
-def main_reply_keyboard():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="Rasm yuborish"), KeyboardButton(text="Statistika")],
-        [KeyboardButton(text="Referral"), KeyboardButton(text="Premium")]
-    ], resize_keyboard=True)
+def main_reply() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✂️ BG o'chirish")],
+            [
+                KeyboardButton(text="👤 Profil"),
+                KeyboardButton(text="💎 Premium"),
+            ],
+            [
+                KeyboardButton(text="👥 Referral"),
+                KeyboardButton(text="📊 Statistika"),
+            ],
+            [
+                KeyboardButton(text="⚙️ Sozlamalar"),
+                KeyboardButton(text="🌐 Til"),
+            ],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Rasm yuboring...",
+    )
