@@ -1,4 +1,3 @@
-from .manager import payment_manager, PaymentManager, PaymentResult
-from .base import PaymentProvider
+from .provider import PaymentProvider, PaymentResult, PaymentManager, payment_manager
 
-__all__ = ["payment_manager", "PaymentManager", "PaymentResult", "PaymentProvider"]
+__all__ = ["PaymentProvider", "PaymentResult", "PaymentManager", "payment_manager"]
