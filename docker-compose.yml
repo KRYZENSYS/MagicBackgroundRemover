@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    container_name: magicbg-bot
+    restart: always
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./storage:/app/storage
+      - ./database:/app/database
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - magicbg
+
+  api:
+    build: .
+    container_name: magicbg-api
+    restart: always
+    env_file: .env
+    command: uvicorn api.server:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./storage:/app/storage
+    networks:
+      - magicbg
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: magicbg-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: magicbg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-magicbg}
+      POSTGRES_DB: magicbg
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - magicbg
+
+  redis:
+    image: redis:7-alpine
+    container_name: magicbg-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - magicbg
+
+volumes:
+  pgdata:
+
+networks:
+  magicbg:
+    driver: bridge
