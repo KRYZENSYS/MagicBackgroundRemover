@@ -1,48 +1,40 @@
-"""Image format converter."""
+"""Image format converter (PNG <-> JPG <-> WEBP)."""
 from __future__ import annotations
 
-import asyncio
 import io
-from typing import Literal
+import logging
 
 from PIL import Image
 
-from src.exceptions import ImageProcessingError
-
-Format = Literal["PNG", "JPEG", "WEBP", "BMP", "TIFF", "GIF"]
+logger = logging.getLogger(__name__)
 
 
 class ImageConverter:
-    @staticmethod
-    async def convert(image_bytes: bytes, target: Format = "PNG", quality: int = 95) -> bytes:
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
+    async def convert(self, img_bytes: bytes, target_format: str = "PNG") -> bytes:
+        img = Image.open(io.BytesIO(img_bytes))
+        target_format = target_format.upper().lstrip(".")
+        if target_format == "JPG":
+            target_format = "JPEG"
+        if img.mode == "RGBA" and target_format in ("JPEG",):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+        out = io.BytesIO()
+        img.save(out, format=target_format, optimize=True, quality=95)
+        return out.getvalue()
 
-            def _do():
-                if target == "JPEG" and img.mode in ("RGBA", "P", "LA"):
-                    background = Image.new("RGB", img.size, (255, 255, 255))
-                    if img.mode in ("RGBA", "LA"):
-                        background.paste(img, mask=img.split()[-1])
-                    else:
-                        background.paste(img.convert("RGBA"))
-                    out = background
-                elif target == "PNG" and img.mode not in ("RGB", "RGBA", "L", "LA", "P"):
-                    out = img.convert("RGBA")
-                else:
-                    out = img
-                buf = io.BytesIO()
-                save_kwargs = {"format": target}
-                if target in ("JPEG", "WEBP"):
-                    save_kwargs["quality"] = quality
-                out.save(buf, **save_kwargs)
-                return buf.getvalue()
-
-            return await asyncio.to_thread(_do)
-        except Exception as e:
-            raise ImageProcessingError(f"Convert failed: {e}")
+    async def to_pdf(self, images: list[bytes]) -> bytes:
+        """Combine multiple images into a single PDF."""
+        pil_images = []
+        for ib in images:
+            img = Image.open(io.BytesIO(ib)).convert("RGB")
+            pil_images.append(img)
+        out = io.BytesIO()
+        if pil_images:
+            pil_images[0].save(out, format="PDF", save_all=True, append_images=pil_images[1:])
+        return out.getvalue()
 
 
 image_converter = ImageConverter()
-
 
 __all__ = ["ImageConverter", "image_converter"]
