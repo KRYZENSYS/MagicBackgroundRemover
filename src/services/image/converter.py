@@ -1,40 +1,40 @@
-"""Image format converter (PNG <-> JPG <-> WEBP)."""
+"""Convert between image formats."""
 from __future__ import annotations
 
 import io
-import logging
 
 from PIL import Image
 
-logger = logging.getLogger(__name__)
-
 
 class ImageConverter:
-    async def convert(self, img_bytes: bytes, target_format: str = "PNG") -> bytes:
-        img = Image.open(io.BytesIO(img_bytes))
-        target_format = target_format.upper().lstrip(".")
-        if target_format == "JPG":
-            target_format = "JPEG"
-        if img.mode == "RGBA" and target_format in ("JPEG",):
-            bg = Image.new("RGB", img.size, (255, 255, 255))
-            bg.paste(img, mask=img.split()[3])
-            img = bg
-        out = io.BytesIO()
-        img.save(out, format=target_format, optimize=True, quality=95)
-        return out.getvalue()
+    FORMATS = {"PNG": "PNG", "JPEG": "JPEG", "WEBP": "WEBP", "BMP": "BMP", "TIFF": "TIFF", "GIF": "GIF"}
 
-    async def to_pdf(self, images: list[bytes]) -> bytes:
+    async def convert(self, img_bytes: bytes, target_format: str = "PNG") -> bytes:
+        target = target_format.upper().lstrip(".")
+        if target not in self.FORMATS:
+            raise ValueError(f"Format {target} not supported")
+        img = Image.open(io.BytesIO(img_bytes))
+        if target == "JPEG" and img.mode != "RGB":
+            img = img.convert("RGB")
+        elif target == "PNG" and img.mode == "P":
+            img = img.convert("RGBA")
+        buf = io.BytesIO()
+        img.save(buf, format=target)
+        return buf.getvalue()
+
+    async def to_pdf(self, img_bytes_list: list[bytes]) -> bytes:
         """Combine multiple images into a single PDF."""
+        if not img_bytes_list:
+            raise ValueError("Empty image list")
         pil_images = []
-        for ib in images:
-            img = Image.open(io.BytesIO(ib)).convert("RGB")
+        for raw in img_bytes_list:
+            img = Image.open(io.BytesIO(raw)).convert("RGB")
             pil_images.append(img)
-        out = io.BytesIO()
-        if pil_images:
-            pil_images[0].save(out, format="PDF", save_all=True, append_images=pil_images[1:])
-        return out.getvalue()
+        buf = io.BytesIO()
+        first, *rest = pil_images
+        first.save(buf, format="PDF", save_all=True, append_images=rest)
+        return buf.getvalue()
 
 
 image_converter = ImageConverter()
-
 __all__ = ["ImageConverter", "image_converter"]
