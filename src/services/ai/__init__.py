@@ -1,21 +1,15 @@
-from .bg_remover import BackgroundRemoverService, bg_remover
-from .enhancer import ImageEnhancerService, image_enhancer
-from .upscaler import UpscalerService, upscaler
-from .face import FaceEnhancerService, face_enhancer
-from .effects import EffectsService, effects_service
-from .validator import ImageValidator, image_validator
+from .bg_remover import bg_remover
+from .upscaler import upscaler
+from .enhancer import image_enhancer
+from .effects import effects_service
+from .face import face_enhancer
+from .validator import image_validator
 
 __all__ = [
-    "BackgroundRemoverService",
     "bg_remover",
-    "ImageEnhancerService",
-    "image_enhancer",
-    "UpscalerService",
     "upscaler",
-    "FaceEnhancerService",
-    "face_enhancer",
-    "EffectsService",
+    "image_enhancer",
     "effects_service",
-    "ImageValidator",
+    "face_enhancer",
     "image_validator",
 ]
