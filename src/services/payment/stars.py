@@ -1,49 +1,29 @@
-"""Telegram Stars payment provider (handled via Bot API)."""
+"""Telegram Stars payment provider (XTR currency)."""
 from __future__ import annotations
 
-import logging
+import time
 
-from src.services.payment.base import PaymentProvider, PaymentResult
-
-logger = logging.getLogger(__name__)
+from src.services.payment.provider import PaymentProvider, PaymentResult
 
 
-class TelegramStarsProvider(PaymentProvider):
-    """Telegram Stars — invoices are sent via bot.send_invoice. We just return amount in XTR."""
-
+class StarsProvider(PaymentProvider):
     name = "stars"
 
-    async def create(self, user_id: int, plan_code: str, amount: float, currency: str) -> PaymentResult:
-        # amount is in UZS, convert to stars (1 star ≈ 100 UZS roughly, configurable)
-        rate = 100  # 1 XTR ≈ 100 UZS
-        stars = max(1, int(amount / rate))
+    async def create(self, user_id: int, amount: int, plan_code: str, **kwargs) -> PaymentResult:
+        # amount in Stars (1 Star ≈ $0.02)
+        order_id = f"stars_{user_id}_{int(time.time())}"
         return PaymentResult(
             success=True,
-            payment_id=0,
-            amount=stars,
-            currency="XTR",
-            payload={"stars": stars, "plan_code": plan_code, "user_id": user_id},
+            payment_id=None,
+            amount=amount,
+            payload={"order_id": order_id, "currency": "XTR"},
         )
 
-    async def check(self, payment_id: int) -> PaymentResult:
-        return PaymentResult(True, payment_id, 0, "XTR", {}, "manual_check")
+    async def verify(self, payload: dict) -> bool:
+        return bool(payload.get("telegram_payment_charge_id"))
 
-    async def handle_webhook(self, data: dict) -> PaymentResult:
-        # Telegram Stars: pre_checkout_query + successful_payment update
-        try:
-            if "successful_payment" in data:
-                payload = data.get("successful_payment", {})
-                return PaymentResult(
-                    True,
-                    0,
-                    int(payload.get("total_amount", 0)),
-                    "XTR",
-                    {"telegram_payment_charge_id": payload.get("telegram_payment_charge_id")},
-                    "ok",
-                )
-        except Exception as e:
-            logger.exception("Stars webhook error: %s", e)
-        return PaymentResult(False, 0, 0, "", {}, "invalid")
+    async def handle_webhook(self, body: dict) -> dict:
+        return {"status": "completed", "verified": True}
 
 
-__all__ = ["TelegramStarsProvider"]
+__all__ = ["StarsProvider"]
