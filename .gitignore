@@ -1,8 +1,50 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
 .env
-logs/*.log
-database/*.db
+.env.local
+.env.production
+
+# Virtual envs
 venv/
 .venv/
+env/
+
+# Data / storage
+data/*.db
+data/backups/*
+!data/backups/.gitkeep
+storage/*
+!storage/.gitkeep
+tmp/*
+!tmp/.gitkeep
+cache/*
+!cache/.gitkeep
+logs/*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Models (heavy AI files)
+models/*.onnx
+models/*.pth
+models/*.bin
+
+# Docker
+.dockerignore
+
+# OS
+.DS_Store
+Thumbs.db
