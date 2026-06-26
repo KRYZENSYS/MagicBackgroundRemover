@@ -1,126 +1,90 @@
-"""Payment manager - routes to the correct provider and records transactions."""
+"""Payment manager: routes to provider, persists Payment record."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+import logging
 from typing import Optional
 
-from aiogram import Bot
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.logging import logger
 from src.database.models.payment import Payment
 from src.database.session import async_session
-from src.services.payment.click_provider import ClickProvider
-from src.services.payment.payme_provider import PaymeProvider
-from src.services.payment.provider import PaymentProvider, PaymentResult, PaymentStatus
-from src.services.payment.telegram_stars import TelegramStarsProvider
+from src.services.payment.base import PaymentProvider, PaymentResult
+from src.services.payment.click import ClickProvider
+from src.services.payment.payme import PaymeProvider
+from src.services.payment.stripe import StripeProvider
+from src.services.payment.stars import TelegramStarsProvider
+from src.services.payment.crypto import CryptoProvider
+from src.services.user.subscription import SubscriptionService
 
 
 class PaymentManager:
-    """Routes payments to providers and persists them."""
+    def __init__(self):
+        self.providers: dict[str, PaymentProvider] = {
+            "click": ClickProvider(),
+            "payme": PaymeProvider(),
+            "stripe": StripeProvider(),
+            "stars": TelegramStarsProvider(),
+            "crypto": CryptoProvider(),
+        }
 
-    def __init__(self, bot: Bot | None = None):
-        self._providers: dict[str, PaymentProvider] = {}
-        if bot:
-            self._providers["telegram_stars"] = TelegramStarsProvider(bot)
-        self._providers["click"] = ClickProvider()
-        self._providers["payme"] = PaymeProvider()
+    def get(self, name: str) -> Optional[PaymentProvider]:
+        return self.providers.get(name)
 
-    def get(self, code: str) -> Optional[PaymentProvider]:
-        return self._providers.get(code)
-
-    async def create(
-        self,
-        user_id: int,
-        plan_code: str,
-        provider_code: str = "telegram_stars",
-    ) -> tuple[PaymentResult, Optional[Payment]]:
-        provider = self.get(provider_code)
+    async def create(self, user_id: int, plan_code: str, provider_name: str) -> tuple[PaymentResult, Optional[Payment]]:
+        provider = self.get(provider_name)
         if not provider:
-            return PaymentResult(False, PaymentStatus.FAILED, error=f"Unknown provider {provider_code}"), None
-        # Get plan amount
-        from src.services.user.subscription import SubscriptionService
-
-        async with async_session() as s:
-            svc = SubscriptionService(s)
-            plan = await svc.get_plan(plan_code)
-            description = f"{plan.name} subscription ({plan.duration_days} days)"
-            amount = plan.price
-
-            result = await provider.create_invoice(
+            return PaymentResult(False, 0, 0, "", {}, "Unknown provider"), None
+        async with async_session() as session:
+            sub_svc = SubscriptionService(session)
+            plan = await sub_svc.get_plan(plan_code)
+            if not plan:
+                return PaymentResult(False, 0, 0, "", {}, "Plan not found"), None
+            payment = Payment(
                 user_id=user_id,
-                amount=amount,
-                description=description,
-                payload=f"{user_id}:{plan_code}",
+                plan_code=plan_code,
+                provider=provider_name,
+                amount=plan.price,
                 currency=plan.currency,
+                status="pending",
             )
-
-            payment: Optional[Payment] = None
-            if result.success:
-                payment = Payment(
-                    user_id=user_id,
-                    plan_id=plan.id,
-                    amount=amount,
-                    currency=plan.currency,
-                    provider=provider_code,
-                    status=PaymentStatus.PENDING.value,
-                    external_id=result.payload.get("invoice_id") or result.payload.get("receipt_id") if result.payload else None,
-                    payload=result.payload or {},
-                    created_at=datetime.utcnow(),
-                )
-                s.add(payment)
-                await s.commit()
-                await s.refresh(payment)
-                # Attach payment id to result for traceability
-                if result.payload is None:
-                    result.payload = {}
-                result.payload["payment_id"] = payment.id
+            session.add(payment)
+            await session.commit()
+            await session.refresh(payment)
+            result = await provider.create(user_id, plan_code, plan.price, plan.currency)
+            payment.external_id = str(result.payload.get("external_id", ""))
+            payment.payload = result.payload
+            await session.commit()
             return result, payment
 
-    async def mark_completed(self, payment_id: int, external_id: Optional[str] = None) -> Optional[Payment]:
-        async with async_session() as s:
-            payment = await s.get(Payment, payment_id)
-            if not payment:
-                return None
-            payment.status = PaymentStatus.COMPLETED.value
-            payment.completed_at = datetime.utcnow()
-            if external_id:
-                payment.external_id = external_id
-            await s.commit()
-            # Activate subscription
-            from src.database.models.user import User
-            from src.services.user.subscription import SubscriptionService
-
-            user = await s.get(User, payment.user_id)
-            sub_svc = SubscriptionService(s)
-            await sub_svc.subscribe(user_id=payment.user_id, plan_code=payment.plan.code if payment.plan else "", payment_id=payment.id)
+    async def confirm(self, payment_id: int) -> Optional[Payment]:
+        """Mark payment as completed and grant premium."""
+        async with async_session() as session:
+            payment = await session.get(Payment, payment_id)
+            if not payment or payment.status == "completed":
+                return payment
+            payment.status = "completed"
+            payment.completed_at = __import__("datetime").datetime.utcnow()
+            sub_svc = SubscriptionService(session)
+            plan = await sub_svc.get_plan(payment.plan_code)
+            days = plan.duration_days if plan else 30
+            await sub_svc.grant_premium(payment.user_id, days, payment.plan_code)
+            await session.commit()
+            await session.refresh(payment)
+            logger.info("Payment %s confirmed, premium granted to user %s for %s days", payment_id, payment.user_id, days)
             return payment
 
-    async def mark_failed(self, payment_id: int, reason: str = "") -> None:
-        async with async_session() as s:
-            payment = await s.get(Payment, payment_id)
+    async def fail(self, payment_id: int, reason: str = "") -> Optional[Payment]:
+        async with async_session() as session:
+            payment = await session.get(Payment, payment_id)
             if not payment:
-                return
-            payment.status = PaymentStatus.FAILED.value
-            payment.payload = {**(payment.payload or {}), "error": reason[:500]}
-            await s.commit()
-
-    async def refund(self, payment_id: int) -> bool:
-        async with async_session() as s:
-            payment = await s.get(Payment, payment_id)
-            if not payment or payment.status != PaymentStatus.COMPLETED.value:
-                return False
-            provider = self.get(payment.provider)
-            if not provider:
-                return False
-            result = await provider.refund(payment.external_id or "")
-            if result.success:
-                payment.status = PaymentStatus.REFUNDED.value
-                await s.commit()
-            return result.success
+                return None
+            payment.status = "failed"
+            payment.error_reason = reason
+            await session.commit()
+            return payment
 
 
-payment_manager: PaymentManager | None = None
+payment_manager = PaymentManager()
 
-
-__all__ = ["PaymentManager", "payment_manager"]
+__all__ = ["PaymentManager", "payment_manager", "PaymentResult"]
