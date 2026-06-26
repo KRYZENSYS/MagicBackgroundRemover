@@ -1,6 +1,6 @@
 from .processor import ImageProcessor, image_processor
 from .converter import ImageConverter, image_converter
-from .batch import BatchProcessor, batch_processor
+from .batch import BatchProcessor, batch_processor, BatchResult
 
 __all__ = [
     "ImageProcessor",
@@ -9,4 +9,5 @@ __all__ = [
     "image_converter",
     "BatchProcessor",
     "batch_processor",
+    "BatchResult",
 ]
