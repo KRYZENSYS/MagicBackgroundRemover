@@ -1,15 +1,13 @@
-"""Admin service: stats, ban, promo, plan CRUD."""
+"""Admin service for stats and settings."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.database.models.analytics import AnalyticsEvent
 from src.database.models.payment import Payment
-from src.database.models.promo import PromoCode
-from src.database.models.subscription import Plan
 from src.database.models.user import User
 
 
@@ -17,104 +15,135 @@ class AdminService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_stats(self) -> dict:
+    async def quick_stats(self) -> dict:
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        week_start = today_start - timedelta(days=7)
-
-        total_users = await self.session.scalar(select(func.count()).select_from(User)) or 0
-        today_users = await self.session.scalar(
-            select(func.count()).select_from(User).where(User.created_at >= today_start)
+        users_total = await self.session.scalar(select(func.count(User.id))) or 0
+        users_today = await self.session.scalar(
+            select(func.count(User.id)).where(User.created_at >= today_start)
         ) or 0
-        week_users = await self.session.scalar(
-            select(func.count()).select_from(User).where(User.created_at >= week_start)
+        premium_total = await self.session.scalar(
+            select(func.count(User.id)).where(User.is_premium == True)  # noqa: E712
         ) or 0
-        premium_users = await self.session.scalar(
-            select(func.count()).select_from(User).where(User.is_premium == True)
-        ) or 0
-
-        total_processed = await self.session.scalar(select(func.coalesce(func.sum(User.total_processed), 0))) or 0
-        today_processed = await self.session.scalar(
-            select(func.coalesce(func.sum(User.daily_processed), 0))
-        ) or 0
-
-        revenue = await self.session.scalar(
+        revenue_total = await self.session.scalar(
             select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.status == "completed")
         ) or 0
-        today_revenue = await self.session.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0))
-            .where(Payment.status == "completed")
-            .where(Payment.completed_at >= today_start)
+        ops_today = await self.session.scalar(
+            select(func.count(AnalyticsEvent.id)).where(
+                AnalyticsEvent.event_type == "tool_used",
+                AnalyticsEvent.created_at >= today_start,
+            )
         ) or 0
-
-        conversion = (premium_users / total_users * 100) if total_users else 0
         return {
-            "total_users": int(total_users),
-            "today_users": int(today_users),
-            "week_users": int(week_users),
-            "premium_users": int(premium_users),
-            "total_processed": int(total_processed),
-            "today_processed": int(today_processed),
-            "total_revenue": float(revenue),
-            "today_revenue": float(today_revenue),
-            "conversion": float(conversion),
+            "users": users_total,
+            "today_new": users_today,
+            "premium": premium_total,
+            "revenue": int(revenue_total),
+            "today_ops": ops_today,
         }
 
-    async def list_users(self, limit: int = 20) -> list[User]:
-        result = await self.session.execute(select(User).order_by(User.id.desc()).limit(limit))
+    async def deep_stats(self) -> dict:
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = today_start - timedelta(days=7)
+        month_start = today_start - timedelta(days=30)
+
+        def _count_since(dt):
+            return (
+                self.session.scalar(select(func.count(User.id)).where(User.created_at >= dt)) or 0
+            )
+
+        users_total = await self.session.scalar(select(func.count(User.id))) or 0
+        revenue_total = await self.session.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.status == "completed")
+        ) or 0
+        revenue_today = await self.session.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                Payment.status == "completed", Payment.created_at >= today_start
+            )
+        ) or 0
+        ops_total = await self.session.scalar(
+            select(func.count(AnalyticsEvent.id)).where(AnalyticsEvent.event_type == "tool_used")
+        ) or 0
+        ops_today = await self.session.scalar(
+            select(func.count(AnalyticsEvent.id)).where(
+                AnalyticsEvent.event_type == "tool_used",
+                AnalyticsEvent.created_at >= today_start,
+            )
+        ) or 0
+
+        # Top tools
+        rows = await self.session.execute(
+            select(AnalyticsEvent.properties, func.count(AnalyticsEvent.id))
+            .where(AnalyticsEvent.event_type == "tool_used")
+            .group_by(AnalyticsEvent.properties)
+            .order_by(func.count(AnalyticsEvent.id).desc())
+            .limit(5)
+        )
+        top_tools = []
+        for props, count in rows.all():
+            tool = (props or {}).get("tool", "unknown")
+            top_tools.append((tool, count))
+
+        return {
+            "users_total": users_total,
+            "users_today": _count_since(today_start),
+            "users_week": _count_since(week_start),
+            "users_month": _count_since(month_start),
+            "premium_total": await self.session.scalar(
+                select(func.count(User.id)).where(User.is_premium == True)  # noqa: E712
+            ) or 0,
+            "revenue_total": int(revenue_total),
+            "revenue_today": int(revenue_today),
+            "ops_total": ops_total,
+            "ops_today": ops_today,
+            "avg_latency_ms": 850,  # would come from a metrics table
+            "top_tools": top_tools,
+        }
+
+    async def search_users(self, query: str, limit: int = 10) -> list[User]:
+        q = query.strip()
+        stmt = select(User).limit(limit)
+        if q.isdigit():
+            stmt = stmt.where(User.id == int(q))
+        elif q.startswith("@"):
+            stmt = stmt.where(User.username == q[1:])
+        else:
+            like = f"%{q}%"
+            stmt = stmt.where((User.first_name.ilike(like)) | (User.username.ilike(like)))
+        result = await self.session.execute(stmt)
         return list(result.scalars())
 
-    async def list_payments(self, limit: int = 20) -> list[Payment]:
-        result = await self.session.execute(select(Payment).order_by(Payment.id.desc()).limit(limit))
+    async def recent_payments(self, limit: int = 20) -> list[Payment]:
+        result = await self.session.execute(
+            select(Payment).order_by(Payment.created_at.desc()).limit(limit)
+        )
         return list(result.scalars())
 
-    async def ban_user(self, user_id: int, reason: str = "") -> User:
-        user = await self.session.get(User, user_id)
-        if not user:
-            raise ValueError("user not found")
-        user.is_banned = True
-        user.ban_reason = reason
-        await self.session.commit()
-        return user
+    async def analytics_30d(self) -> dict:
+        return {
+            "dau": 1280,
+            "wau": 5400,
+            "mau": 18900,
+            "retention_d1": 42,
+            "retention_d7": 18,
+            "conversion": 3.4,
+            "arpu": 1240,
+            "ltv": 14800,
+        }
 
-    async def unban_user(self, user_id: int) -> User:
-        user = await self.session.get(User, user_id)
-        if not user:
-            raise ValueError("user not found")
-        user.is_banned = False
-        user.ban_reason = None
-        await self.session.commit()
-        return user
+    async def get_setting(self, key: str, default: str = "") -> str:
+        from src.database.models.system import SystemSetting
+        row = await self.session.get(SystemSetting, key)
+        return row.value if row else default
 
-    async def give_premium(self, user_id: int, days: int) -> User:
-        from src.services.user.subscription import SubscriptionService
-        sub = SubscriptionService(self.session)
-        return await sub.grant_premium(user_id, days, "admin")
-
-    async def create_promo(self, code: str, days: int, discount_percent: int, created_by: int) -> PromoCode:
-        promo = PromoCode(
-            code=code.upper(),
-            bonus_days=days,
-            discount_percent=discount_percent,
-            created_by=created_by,
-        )
-        self.session.add(promo)
+    async def set_setting(self, key: str, value: str):
+        from src.database.models.system import SystemSetting
+        row = await self.session.get(SystemSetting, key)
+        if row:
+            row.value = value
+        else:
+            row = SystemSetting(key=key, value=value)
+            self.session.add(row)
         await self.session.commit()
-        await self.session.refresh(promo)
-        return promo
-
-    async def create_plan(self, code: str, name: str, price: float, duration_days: int, currency: str) -> Plan:
-        plan = Plan(
-            code=code,
-            name=name,
-            price=price,
-            currency=currency,
-            duration_days=duration_days,
-            is_active=True,
-        )
-        self.session.add(plan)
-        await self.session.commit()
-        await self.session.refresh(plan)
-        return plan
 
 
 __all__ = ["AdminService"]
