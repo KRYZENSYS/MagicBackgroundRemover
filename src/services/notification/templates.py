@@ -1,95 +1,74 @@
-"""Notification message templates."""
+"""Multilingual notification templates (UZ/RU/EN)."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
 
-
-@dataclass
 class NotificationTemplates:
-    """i18n-ready templates. Keys are stable; values can be replaced via i18n files later."""
+    T = {
+        "uz": {
+            "welcome": "👋 Assalomu alaykum, {name}!\n\n🎨 Men — rasm fon o'chiruvchi bot.\nRasm yuboring — men avtomatik fonni o'chirib beraman.\n\n💎 Premium bilan cheksiz ishlang!",
+            "daily_limit": "📊 Bugun limit tugadi: {limit}/{limit}\n\n💎 Premium bilan cheksiz ishlang:\n/premium",
+            "premium_active": "💎 Premium faollashtirildi!\n⏳ Tugash: {date}",
+            "premium_expired": "⚠️ Premium tugadi. Yangilang: /premium",
+            "payment_success": "✅ To'lov tasdiqlandi!\n💎 Premium berildi: {days} kun",
+            "referral_invite": "🎁 Sizning linkingiz:\n{link}\n\nDo'st taklif qiling — ikkovingiz +7 kun premium oling!",
+            "new_feature": "🆕 Yangi funksiya: {name}\n\n{description}",
+        },
+        "ru": {
+            "welcome": "👋 Привет, {name}!\n\n🎨 Я — бот для удаления фона с изображений.\nОтправь фото — я автоматически уберу фон.\n\n💎 С Premium без лимитов!",
+            "daily_limit": "📊 Лимит на сегодня исчерпан: {limit}/{limit}\n\n💎 С Premium без ограничений:\n/premium",
+            "premium_active": "💎 Premium активирован!\n⏳ До: {date}",
+            "premium_expired": "⚠️ Premium истек. Продлить: /premium",
+            "payment_success": "✅ Оплата подтверждена!\n💎 Premium: {days} дней",
+            "referral_invite": "🎁 Ваша ссылка:\n{link}\n\nПригласите друга — оба получите +7 дней Premium!",
+            "new_feature": "🆕 Новая функция: {name}\n\n{description}",
+        },
+        "en": {
+            "welcome": "👋 Hi, {name}!\n\n🎨 I'm a background removal bot.\nSend me a photo — I'll auto-remove its background.\n\n💎 Unlimited with Premium!",
+            "daily_limit": "📊 Daily limit reached: {limit}/{limit}\n\n💎 Get unlimited with Premium:\n/premium",
+            "premium_active": "💎 Premium activated!\n⏳ Until: {date}",
+            "premium_expired": "⚠️ Premium expired. Renew: /premium",
+            "payment_success": "✅ Payment confirmed!\n💎 Premium: {days} days",
+            "referral_invite": "🎁 Your invite link:\n{link}\n\nInvite a friend — you both get +7 days Premium!",
+            "new_feature": "🆕 New feature: {name}\n\n{description}",
+        },
+    }
 
-    WELCOME_UZ = (
-        "🎉 Xush kelibsiz, {first_name}!\n\n"
-        "Men — <b>MagicBackground Remover</b> 🤖\n"
-        "Rasmlaringiz fonini 1 soniyada o'chirib beraman.\n\n"
-        "🚀 Boshlash uchun /help buyrug'ini yuboring."
-    )
-    WELCOME_RU = (
-        "🎉 Добро пожаловать, {first_name}!\n\n"
-        "Я — <b>MagicBackground Remover</b> 🤖\n"
-        "Удаляю фон с фото за 1 секунду.\n\n"
-        "🚀 Чтобы начать, отправьте /help."
-    )
-    WELCOME_EN = (
-        "🎉 Welcome, {first_name}!\n\n"
-        "I'm <b>MagicBackground Remover</b> 🤖\n"
-        "I remove photo backgrounds in 1 second.\n\n"
-        "🚀 Send /help to get started."
-    )
+    @classmethod
+    def _tr(cls, key: str, lang: str, **kwargs) -> str:
+        bundle = cls.T.get(lang, cls.T["uz"])
+        template = bundle.get(key, cls.T["uz"].get(key, key))
+        try:
+            return template.format(**kwargs)
+        except KeyError:
+            return template
 
-    PREMIUM_EXPIRING_UZ = (
-        "⏳ <b>Premium obuna tugayapti!</b>\n\n"
-        "Sizning premium obnangiz <b>{days_left}</b> kun ichida tugaydi.\n"
-        "Davom ettirish uchun /premium bosing."
-    )
-    PREMIUM_EXPIRING_RU = (
-        "⏳ <b>Премиум-подписка скоро истекает!</b>\n\n"
-        "Ваша премиум-подписка истекает через <b>{days_left}</b> дн.\n"
-        "Продлить: /premium."
-    )
+    @classmethod
+    def welcome(cls, name: str, lang: str = "uz") -> str:
+        return cls._tr("welcome", lang, name=name)
 
-    PREMIUM_EXPIRED_UZ = (
-        "🔔 Premium obna tugadi.\n"
-        "Cheksiz ishlash uchun qayta faollashtiring: /premium"
-    )
+    @classmethod
+    def daily_limit_reached(cls, limit: int, lang: str = "uz") -> str:
+        return cls._tr("daily_limit", lang, limit=limit)
 
-    PAYMENT_SUCCESS_UZ = (
-        "✅ <b>To'lov muvaffaqiyatli!</b>\n\n"
-        "Sizning premium obnangiz faollashtirildi.\n"
-        "Imkoniyatlardan to'liq foydalaning!"
-    )
-    PAYMENT_SUCCESS_RU = (
-        "✅ <b>Оплата прошла успешно!</b>\n\n"
-        "Премиум-подписка активирована.\n"
-        "Пользуйтесь всеми возможностями!"
-    )
+    @classmethod
+    def premium_active(cls, date: str, lang: str = "uz") -> str:
+        return cls._tr("premium_active", lang, date=date)
 
-    DAILY_LIMIT_REACHED_UZ = (
-        "🚫 Bugungi limit tugadi ({limit} ta).\n"
-        "Premium obna bilan cheksiz ishlang: /premium"
-    )
+    @classmethod
+    def premium_expired(cls, lang: str = "uz") -> str:
+        return cls._tr("premium_expired", lang)
 
-    REFERRAL_INVITED_UZ = (
-        "🎁 Sizni <b>{inviter_name}</b> taklif qildi!\n\n"
-        "Bonus sifatida <b>{days}</b> kunlik premium berildi.\n"
-        "Sizning referral linkingiz: <code>{link}</code>"
-    )
+    @classmethod
+    def payment_success(cls, days: int, lang: str = "uz") -> str:
+        return cls._tr("payment_success", lang, days=days)
 
-    @staticmethod
-    def welcome(first_name: str, lang: str = "uz") -> str:
-        t = getattr(NotificationTemplates, f"WELCOME_{lang.upper()}", NotificationTemplates.WELCOME_UZ)
-        return t.format(first_name=first_name or "do'st")
+    @classmethod
+    def referral_invite(cls, link: str, lang: str = "uz") -> str:
+        return cls._tr("referral_invite", lang, link=link)
 
-    @staticmethod
-    def premium_expiring(days_left: int, lang: str = "uz") -> str:
-        t = getattr(NotificationTemplates, f"PREMIUM_EXPIRING_{lang.upper()}", NotificationTemplates.PREMIUM_EXPIRING_UZ)
-        return t.format(days_left=days_left)
-
-    @staticmethod
-    def premium_expired(lang: str = "uz") -> str:
-        t = getattr(NotificationTemplates, f"PREMIUM_EXPIRED_{lang.upper()}", NotificationTemplates.PREMIUM_EXPIRED_UZ)
-        return t
-
-    @staticmethod
-    def payment_success(lang: str = "uz") -> str:
-        t = getattr(NotificationTemplates, f"PAYMENT_SUCCESS_{lang.upper()}", NotificationTemplates.PAYMENT_SUCCESS_UZ)
-        return t
-
-    @staticmethod
-    def daily_limit_reached(limit: int, lang: str = "uz") -> str:
-        t = getattr(NotificationTemplates, f"DAILY_LIMIT_REACHED_{lang.upper()}", NotificationTemplates.DAILY_LIMIT_REACHED_UZ)
-        return t.format(limit=limit)
+    @classmethod
+    def new_feature(cls, name: str, description: str, lang: str = "uz") -> str:
+        return cls._tr("new_feature", lang, name=name, description=description)
 
 
 __all__ = ["NotificationTemplates"]
