@@ -1,23 +1,23 @@
-FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04 AS base
+FROM python:3.11-slim
 
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3-pip \
     build-essential libpq-dev libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 \
+    libgomp1 curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --extra-index-url https://download.pytorch.org/whl/cpu torch && \
+    pip install -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /data/models
+RUN chmod +x railway_start.sh render_start.sh && mkdir -p /data/models /app/logs
 
 EXPOSE 8080
 
-CMD ["python", "-m", "src.main"]
+CMD ["./railway_start.sh"]
