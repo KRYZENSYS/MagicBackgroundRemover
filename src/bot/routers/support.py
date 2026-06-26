@@ -1,77 +1,98 @@
-"""Support router: contact, FAQ, send to admins."""
+"""Support router: FAQ, contact admin, ticket creation."""
 from __future__ import annotations
 
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from src.config.logging import logger
-from src.config.settings import settings
+from src.bot.keyboards.inline import get_support_kb
+from src.database.models.support import SupportTicket
+from src.database.session import async_session
+from src.services.admin.admin import AdminService
+from src.services.notification.scheduler import notification_scheduler
 
-support_router = Router(name="support")
+router = Router(name="support")
 
 
-class SupportChat(StatesGroup):
-    waiting_message = State()
+class SupportFlow(StatesGroup):
+    question = State()
 
 
-@support_router.message(Command("support"))
-@support_router.callback_query(F.data == "menu:support")
-async def show_support(event: Message | CallbackQuery, state: FSMContext):
-    await state.set_state(SupportChat.waiting_message)
-    text = (
-        "💬 <b>Support</b>\n\n"
-        "Savolingizni yozing — adminlar tez orada javob beradi.\n\n"
-        "Bekor qilish: /cancel"
+@router.message(Command("support"))
+@router.message(F.text == "💬 Yordam")
+async def support_menu(message: Message):
+    await message.answer(
+        "💬 <b>Yordam</b>\n\n"
+        "Tez-tez beriladigan savollar:\n"
+        "❓ Bot qanday ishlaydi?\n"
+        "❓ Premium nima beradi?\n"
+        "❓ To'lov qanday?\n\n"
+        "Yoki savolingizni yozing:",
+        reply_markup=get_support_kb(),
     )
-    if isinstance(event, CallbackQuery):
-        await event.message.edit_text(text)
-        await event.answer()
-    else:
-        await event.answer(text)
 
 
-@support_router.message(SupportChat.waiting_message)
-async def forward_support(message: Message, state: FSMContext, bot: Bot, db_user):
-    user_info = (
-        f"📨 <b>Yangi support xabar</b>\n\n"
-        f"👤 {db_user.first_name} ({db_user.id})\n"
-        f"📛 @{db_user.username or '—'}\n\n"
-        f"💬 {message.text}"
-    )
-    sent = 0
-    for admin_id in settings.ADMIN_IDS:
-        try:
-            await bot.send_message(admin_id, user_info)
-            sent += 1
-        except Exception as e:
-            logger.warning("Support forward to %s failed: %s", admin_id, e)
-    if sent:
-        await message.answer("✅ Xabaringiz yuborildi. Tez orada javob beramiz.")
-    else:
-        await message.answer("⚠️ Hozircha adminlar bilan bog'lanib bo'lmadi. Keyinroq urinib ko'ring.")
-    await state.clear()
-
-
-@support_router.callback_query(F.data == "menu:faq")
-async def show_faq(call: CallbackQuery):
-    text = (
-        "❓ <b>FAQ</b>\n\n"
-        "<b>1. Limit qancha?</b>\n"
-        "Bepul: 5 rasm/kun. Premium: cheksiz.\n\n"
-        "<b>2. Qanday to'layman?</b>\n"
-        "Telegram Stars, Click, Payme, Stripe.\n\n"
-        "<b>3. Premium qancha?</b>\n"
-        "Oylik: 19900 so'm. Yillik: 179900 so'm.\n\n"
-        "<b>4. Referral qanday ishlaydi?</b>\n"
-        "Do'stni taklif qiling — ikkovingiz +7 kun premium olasiz.\n\n"
-        "<b>5. Natijalar qayerda saqlanadi?</b>\n"
-        "Telegram chatda. Serverda 24 soat.\n"
-    )
-    await call.message.edit_text(text, reply_markup=call.message.reply_markup)
+@router.callback_query(F.data == "support:ask")
+async def support_ask(call: CallbackQuery, state: FSMContext):
+    await state.set_state(SupportFlow.question)
+    await call.message.answer("✍️ Savolingizni yozing — adminlar tez orada javob beradi.")
     await call.answer()
 
 
-__all__ = ["support_router"]
+@router.message(SupportFlow.question)
+async def support_question(message: Message, state: FSMContext, session):
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Iltimos matn yuboring.")
+        return
+    ticket = SupportTicket(
+        user_id=message.from_user.id,
+        question=text,
+        status="open",
+    )
+    session.add(ticket)
+    await session.commit()
+    await session.refresh(ticket)
+    await message.answer(
+        f"✅ Savol qabul qilindi! #{ticket.id}\n\n"
+        "Admin javob berishi bilan xabar olasiz."
+    )
+    # Notify admins
+    from src.config.settings import settings
+    for admin_id in settings.ADMIN_IDS:
+        try:
+            await message.bot.send_message(
+                admin_id,
+                f"🆕 Yangi support #{ticket.id}\n"
+                f"👤 User: {message.from_user.id}\n"
+                f"💬 {text[:200]}",
+                reply_markup=get_support_kb(),
+            )
+        except Exception:
+            pass
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("support:reply:"))
+async def admin_reply(call: CallbackQuery, state: FSMContext, session):
+    # Only for admins
+    from src.config.settings import settings
+    if call.from_user.id not in settings.ADMIN_IDS:
+        await call.answer("Ruxsat yo'q", show_alert=True)
+        return
+    parts = call.data.split(":")
+    ticket_id = int(parts[2])
+    ticket = await session.get(SupportTicket, ticket_id)
+    if not ticket:
+        await call.answer("Topilmadi", show_alert=True)
+        return
+    from src.bot.states import AdminSupportReply
+    await state.set_state(AdminSupportReply.ticket_id)
+    await state.update_data(ticket_id=ticket_id)
+    await call.message.answer(f"💬 Javob yozing #{ticket_id}:")
+    await call.answer()
+
+
+__all__ = ["router", "SupportFlow"]
