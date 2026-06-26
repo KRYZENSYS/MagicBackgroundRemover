@@ -1,21 +1,18 @@
-"""Simple in-memory throttling middleware."""
+"""Throttling middleware: per-user message rate limit."""
 from __future__ import annotations
 
 import asyncio
 import time
-from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
-
-from src.config.settings import settings
+from aiogram.types import Message, TelegramObject
 
 
 class ThrottlingMiddleware(BaseMiddleware):
-    def __init__(self, rate_limit_per_min: int = 60):
-        self.rate = rate_limit_per_min
-        self._buckets: dict[int, list[float]] = defaultdict(list)
+    def __init__(self, rate: float = 1.5):
+        self.rate = rate
+        self._last: Dict[int, float] = {}
         self._lock = asyncio.Lock()
 
     async def __call__(
@@ -25,16 +22,14 @@ class ThrottlingMiddleware(BaseMiddleware):
         data: Dict[str, Any],
     ) -> Any:
         user = data.get("event_from_user")
-        if not user or user.id in settings.ADMIN_IDS:
+        if not user or not isinstance(event, Message):
             return await handler(event, data)
-        now = time.time()
-        bucket = self._buckets[user.id]
-        # Drop entries older than 60s
-        bucket[:] = [t for t in bucket if now - t < 60]
-        if len(bucket) >= self.rate:
-            # Silent drop - user is throttled
-            return
-        bucket.append(now)
+        now = time.monotonic()
+        async with self._lock:
+            last = self._last.get(user.id, 0)
+            if now - last < self.rate:
+                return None
+            self._last[user.id] = now
         return await handler(event, data)
 
 
