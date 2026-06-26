@@ -1,22 +1,48 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
-.env
-.venv/
-venv/
-*.log
-logs/*.log
-storage/
-database/*.db
-database/backups/
-.coverage
-htmlcov/
-.idea/
-.vscode/
-dist/
-build/
+*.py[cod]
+*$py.class
+*.so
+.Python
 *.egg-info/
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 .mypy_cache/
 .ruff_cache/
-node_modules/
+dist/
+build/
+venv/
+.venv/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Data
+data/
+models/
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker
+docker-image.tar
+
+# Misc
+.tox/
+.cache/
