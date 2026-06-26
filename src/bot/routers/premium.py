@@ -1,129 +1,143 @@
-"""Premium subscription flow: plans -> provider -> invoice."""
+"""Premium router: plans, checkout, payment confirm."""
 from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, LabeledPrice, Message
+from aiogram.utils.web_app import WebAppInfo
 
-from src.bot.keyboards.inline import get_payment_providers_kb, get_premium_plans_kb
-from src.bot.states import PremiumFlow
-from src.services.payment.manager import payment_manager
+from src.bot.keyboards.inline import get_plans_kb, get_pay_methods_kb, get_premium_kb
+from src.services.payment.provider import payment_manager
 from src.services.user.subscription import SubscriptionService
 
-premium_router = Router(name="premium")
+router = Router(name="premium")
 
 
-@premium_router.message(Command("premium"))
-@premium_router.callback_query(F.data == "menu:premium")
-async def show_premium(event: Message | CallbackQuery, session, db_user):
-    svc = SubscriptionService(session)
-    plans = await svc.list_plans()
-    plan_dicts = [
-        {"code": p.code, "name": p.name, "price": p.price, "currency": p.currency}
-        for p in plans
-    ]
-    text = (
-        "💎 <b>Premium tariflar</b>\n\n"
+@router.message(Command("premium"))
+@router.message(F.text == "💎 Premium")
+async def premium_menu(message: Message, session):
+    sub_svc = SubscriptionService(session)
+    sub = await sub_svc.get_user_subscription(message.from_user.id)
+    text = "💎 <b>Premium imkoniyatlar</b>\n\n"
+    if sub and sub.user.is_premium:
+        text += f"✅ Premium faollashtirilgan\n📅 Tugash: {sub.user.premium_until}\n\n"
+    text += (
         "Premium bilan:\n"
-        "✅ Cheksiz rasm ishlov\n"
-        "✅ Ultra HD sifat\n"
-        "✅ Barcha effektlar\n"
-        "✅ Tezkor navbat\n\n"
-        "Quyidagidan tanlang:"
+        "♾️ Cheksiz rasm\n"
+        "🎨 Barcha effektlar\n"
+        "⚡️ Tezroq ishlov\n"
+        "🎁 Bonus kunlar\n"
+        "💬 Uchrashuvsiz qo'llab-quvvatlash\n\n"
+        "Tarifni tanlang:"
     )
-    if isinstance(event, CallbackQuery):
-        await event.message.edit_text(text, reply_markup=get_premium_plans_kb(plan_dicts))
-        await event.answer()
+    plans = await sub_svc.list_active()
+    if plans:
+        await message.answer(text, reply_markup=get_plans_kb(plans))
     else:
-        await event.answer(text, reply_markup=get_premium_plans_kb(plan_dicts))
+        await message.answer(text, reply_markup=get_premium_kb())
 
 
-@premium_router.callback_query(F.data.startswith("plan:"))
-async def pick_plan(call: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("plan:"))
+async def select_plan(call: CallbackQuery, session):
     code = call.data.split(":", 1)[1]
-    await state.update_data(plan_code=code)
-    await call.message.edit_text(
-        f"💳 <b>To'lov usulini tanlang</b>\n\nTarif: <code>{code}</code>",
-        reply_markup=get_payment_providers_kb(code),
+    sub_svc = SubscriptionService(session)
+    plan = await sub_svc.get_plan(code)
+    if not plan:
+        await call.answer("Tarif topilmadi", show_alert=True)
+        return
+    text = (
+        f"💎 <b>{plan.name}</b>\n\n"
+        f"💰 Narx: <b>{plan.price:,} {plan.currency}</b>\n"
+        f"📅 Muddat: {plan.duration_days} kun\n\n"
+        "To'lov usulini tanlang:"
     )
+    await call.message.edit_text(text, reply_markup=get_pay_methods_kb(code))
     await call.answer()
 
 
-@premium_router.callback_query(F.data.startswith("pay:"))
-async def create_payment(call: CallbackQuery, state: FSMContext, bot, db_user):
-    _, provider, plan_code = call.data.split(":")
-    await state.update_data(plan_code=plan_code, provider=provider)
-    result, payment = await payment_manager.create(db_user.id, plan_code, provider)
+@router.callback_query(F.data.startswith("pay:"))
+async def choose_pay(call: CallbackQuery, session):
+    parts = call.data.split(":")
+    if len(parts) != 3:
+        await call.answer("Format xato", show_alert=True)
+        return
+    _, plan_code, provider = parts
+    mgr = payment_manager(session)
+    result, payment = await mgr.create(call.from_user.id, plan_code, provider)
     if not result.success:
-        await call.message.edit_text(f"❌ Xato: {result.error}\n\nQayta urinib ko'ring: /premium")
+        await call.message.edit_text(f"❌ Xatolik: {result.error}")
         await call.answer()
         return
     if provider == "stars":
-        # Send Telegram Stars invoice
+        # Telegram Stars — send invoice
+        prices = [LabeledPrice(label=f"Premium {plan_code}", amount=int(result.amount * 100))]
         try:
-            await bot.send_invoice(
-                chat_id=db_user.id,
-                title=f"Premium ({plan_code})",
-                description=f"Premium tarif: {plan_code}",
-                payload=f"{db_user.id}:{plan_code}",
+            await call.bot.send_invoice(
+                chat_id=call.from_user.id,
+                title="Premium tarif",
+                description=f"Premium {plan_code}",
+                payload=f"premium:{plan_code}:{payment.id}",
                 provider_token="",
                 currency="XTR",
-                prices=[{"label": plan_code, "amount": int(result.amount)}],
+                prices=prices,
             )
-            await call.message.edit_text("✅ Invoice yuborildi. To'lovni yakunlang.")
+            await call.answer("📤 Invoice yuborildi")
         except Exception as e:
-            await call.message.edit_text(f"❌ {e}")
-    else:
-        pay_url = (result.payload or {}).get("pay_url") or (result.payload or {}).get("invoice_id")
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 To'lov", url=pay_url)] if pay_url else [],
-            [InlineKeyboardButton(text="✅ Tekshirish", callback_data=f"check:{payment.id if payment else 0}")],
-        ].__class__([[InlineKeyboardButton(text="💳 To'lov", url=pay_url)] if pay_url else []]).union(None) if pay_url else InlineKeyboardMarkup())
-        # Simpler build
-        rows = []
-        if pay_url:
-            rows.append([InlineKeyboardButton(text="💳 To'lov qilish", url=pay_url)])
-        rows.append([InlineKeyboardButton(text="✅ Tekshirish", callback_data=f"check:{payment.id if payment else 0}")])
-        from aiogram.types import InlineKeyboardMarkup
-        kb = InlineKeyboardMarkup(inline_keyboard=rows)
+            await call.message.edit_text(f"❌ Invoice xato: {e}")
+            await call.answer()
+        return
+    # Other providers — give pay URL
+    pay_url = result.payload.get("pay_url")
+    if pay_url:
+        kb = None
+        try:
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💳 To'lash", url=pay_url),
+                InlineKeyboardButton(text="🔄 Tekshirish", callback_data=f"check:{payment.id}"),
+            ]])
+        except Exception:
+            pass
         await call.message.edit_text(
-            f"💳 <b>To'lov havolasi</b>\n\nTarif: <code>{plan_code}</code>\nProvider: {provider}\n\nHavolani ochib to'lovni yakunlang.",
+            f"💳 To'lov havolasi tayyor:\n\n<code>{pay_url}</code>\n\n"
+            "To'lovni amalga oshiring va «Tekshirish» tugmasini bosing.",
             reply_markup=kb,
         )
-    await state.clear()
-    await call.answer()
-
-
-@premium_router.callback_query(F.data.startswith("check:"))
-async def check_payment(call: CallbackQuery, db_user, session):
-    payment_id = int(call.data.split(":")[1])
-    from src.database.models.payment import Payment
-    payment = await session.get(Payment, payment_id)
-    if not payment:
-        await call.answer("Topilmadi.", show_alert=True)
-        return
-    if payment.status == "completed":
-        await call.message.edit_text("✅ To'lov tasdiqlandi! Premium faollashtirildi.")
-        await call.answer()
-        return
-    if payment.status == "failed":
-        await call.message.edit_text("❌ To'lov amalga oshmadi.")
-        await call.answer()
-        return
-    await call.message.edit_text("⏳ To'lov hali tasdiqlanmagan. Bir ozdan keyin yana urinib ko'ring.")
-    await call.answer()
-
-
-@premium_router.message(Command("myplan"))
-async def cmd_myplan(message: Message, db_user):
-    if db_user.is_premium and db_user.premium_until:
-        await message.answer(
-            f"💎 Premium <b>faol</b>\nTugash: {db_user.premium_until:%d.%m.%Y}",
-        )
     else:
-        await message.answer("💎 Premium faol emas. /premium orqali faollashtiring.")
+        await call.message.edit_text(f"❌ To'lov sahifasi ochilmadi: {result.error}")
+    await call.answer()
 
 
-__all__ = ["premium_router"]
+@router.callback_query(F.data.startswith("check:"))
+async def check_payment(call: CallbackQuery, session):
+    payment_id = int(call.data.split(":", 1)[1])
+    mgr = payment_manager(session)
+    payment = await mgr.confirm(payment_id, success=True) if call.data.endswith(":force") else None
+    if not payment:
+        await call.message.edit_text("⏳ To'lov hali qabul qilinmagan. Iltimos kuting...")
+        await call.answer()
+        return
+    await call.message.edit_text(
+        f"✅ To'lov tasdiqlandi!\n\nPremium faollashtirildi."
+    )
+    await call.answer()
+
+
+@router.pre_checkout_query()
+async def pre_checkout(query):
+    await query.answer(ok=True)
+
+
+@router.message(F.successful_payment)
+async def successful_payment(message: Message, session):
+    sp = message.successful_payment
+    payload = sp.invoice_payload
+    if payload and payload.startswith("premium:"):
+        _, plan_code, payment_id_s = payload.split(":")
+        payment_id = int(payment_id_s)
+        mgr = payment_manager(session)
+        await mgr.confirm(payment_id, success=True)
+        await message.answer("✅ To'lov tasdiqlandi! Premium faollashtirildi.")
+
+
+__all__ = ["router"]
