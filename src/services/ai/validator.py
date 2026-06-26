@@ -1,79 +1,42 @@
-"""Image validation: format, size, dimensions, malware heuristics."""
+"""Image validation: format, size, dimensions."""
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
-from pathlib import Path
+import logging
 
 from PIL import Image
 
 from src.config.settings import settings
-from src.constants import ALLOWED_IMAGE_EXT, MAX_IMAGE_DIMENSION
-from src.exceptions import FileTooLargeError, InvalidFileError
 
-
-@dataclass
-class ImageMeta:
-    width: int
-    height: int
-    format: str
-    mode: str
-    file_size: int
-    has_alpha: bool
+logger = logging.getLogger(__name__)
 
 
 class ImageValidator:
-    @staticmethod
-    def check_size(data: bytes) -> None:
-        max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
-        if len(data) > max_bytes:
-            raise FileTooLargeError(
-                f"File exceeds limit ({settings.MAX_FILE_SIZE_MB} MB). Got {len(data) // (1024 * 1024)} MB."
-            )
-
-    @staticmethod
-    def check_extension(filename: str) -> str:
-        ext = Path(filename).suffix.lower()
-        if ext not in ALLOWED_IMAGE_EXT:
-            raise InvalidFileError(f"Unsupported format: {ext}")
-        return ext
-
-    @staticmethod
-    def inspect(data: bytes, filename: str | None = None) -> ImageMeta:
-        ImageValidator.check_size(data)
-        if filename:
-            ImageValidator.check_extension(filename)
+    def inspect(self, img_bytes: bytes) -> dict:
+        if not img_bytes:
+            raise ValueError("Bo'sh rasm")
+        if len(img_bytes) > settings.MAX_IMAGE_SIZE_MB * 1024 * 1024:
+            raise ValueError(f"Rasm {settings.MAX_IMAGE_SIZE_MB}MB dan katta")
         try:
-            img = Image.open(io.BytesIO(data))
+            img = Image.open(io.BytesIO(img_bytes))
             img.verify()
-            img = Image.open(io.BytesIO(data))
-            if max(img.size) > MAX_IMAGE_DIMENSION:
-                raise InvalidFileError(f"Image too large: {img.size}. Max dim: {MAX_IMAGE_DIMENSION}")
-            return ImageMeta(
-                width=img.width,
-                height=img.height,
-                format=img.format or "PNG",
-                mode=img.mode,
-                file_size=len(data),
-                has_alpha="A" in img.mode,
-            )
-        except InvalidFileError:
-            raise
         except Exception as e:
-            raise InvalidFileError(f"Invalid or corrupted image: {e}")
-
-    @staticmethod
-    def is_suspicious(data: bytes) -> bool:
-        suspicious_signatures = [b"<script", b"<?php", b"#!/bin/", b"MZ\x90\x00"]
-        for sig in suspicious_signatures:
-            if sig in data[:8192]:
-                return True
-        if data.count(b"ICC_PROFILE") > 50:
-            return True
-        return False
+            raise ValueError(f"Rasm buzilgan: {e}")
+        img = Image.open(io.BytesIO(img_bytes))
+        w, h = img.size
+        if w < settings.MIN_IMAGE_DIMENSION or h < settings.MIN_IMAGE_DIMENSION:
+            raise ValueError(f"Rasm juda kichik (min {settings.MIN_IMAGE_DIMENSION}px)")
+        if w > settings.MAX_IMAGE_DIMENSION or h > settings.MAX_IMAGE_DIMENSION:
+            raise ValueError(f"Rasm juda katta (max {settings.MAX_IMAGE_DIMENSION}px)")
+        return {
+            "width": w,
+            "height": h,
+            "format": img.format,
+            "mode": img.mode,
+            "size_bytes": len(img_bytes),
+        }
 
 
 image_validator = ImageValidator()
 
-
-__all__ = ["ImageValidator", "image_validator", "ImageMeta"]
+__all__ = ["ImageValidator", "image_validator"]
