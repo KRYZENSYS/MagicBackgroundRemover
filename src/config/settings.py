@@ -1,9 +1,8 @@
-"""Centralized application settings."""
+"""Application settings loaded from .env / environment variables."""
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
-from typing import Literal
+from typing import List, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,119 +16,78 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Bot
-    BOT_TOKEN: str = "YOUR_BOT_TOKEN_HERE"
-    BOT_USERNAME: str = "@MagicBgBot"
-    BOT_NAME: str = "MagicBackground Remover Pro"
-
-    # Admins
-    ADMIN_IDS: list[int] = Field(default_factory=list)
-    REQUIRED_CHANNELS: list[str] = Field(default_factory=list)
-
-    # Environment
-    ENVIRONMENT: Literal["development", "staging", "production"] = "production"
+    # App
+    APP_NAME: str = "MagicBackgroundRemover"
+    VERSION: str = "1.0.0"
+    ENVIRONMENT: str = "development"
     DEBUG: bool = False
-    LOG_LEVEL: str = "INFO"
+
+    # Telegram
+    BOT_TOKEN: str = ""
+    ADMIN_IDS: List[int] = Field(default_factory=list)
+    ADMIN_TOKEN: str = ""
+
+    # Webhook
+    USE_WEBHOOK: bool = False
+    WEBHOOK_BASE: str = "http://localhost:8080"
+    WEBHOOK_URL: str = ""
+    WEBHOOK_HOST: str = "0.0.0.0"
+    WEBHOOK_PORT: int = 8080
+    WEBHOOK_PATH: str = "/tg/webhook"
+    SECRET_KEY: str = ""
 
     # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./data/bot.db"
-    DATABASE_BACKUP_DIR: Path = Path("./data/backups")
-
-    # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./data/db.sqlite"
     USE_REDIS: bool = False
+    REDIS_URL: str = "redis://localhost:6379/0"
 
-    # API
-    API_HOST: str = "0.0.0.0"
-    API_PORT: int = 8000
-    API_SECRET_KEY: str = "CHANGE_ME"
-    API_CORS_ORIGINS: str = "*"
+    # Payments
+    CLICK_MERCHANT_ID: str = ""
+    CLICK_SERVICE_ID: str = ""
+    CLICK_SECRET: str = ""
+    PAYME_MERCHANT_ID: str = ""
+    PAYME_KEY: str = ""
+    PAYME_ENDPOINT: str = "https://checkout.paycom.uz"
+    STRIPE_SECRET_KEY: str = ""
+    NOWPAYMENTS_API_KEY: str = ""
+
+    # AI / models
+    MODELS_DIR: str = "/data/models"
+    FORCE_CPU: bool = False
+
+    # SMTP
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    FROM_EMAIL: str = "hello@magicbg.bot"
+
+    # Sentry
+    SENTRY_DSN: str = ""
 
     # Limits
     FREE_DAILY_LIMIT: int = 5
-    PREMIUM_DAILY_LIMIT: int = 100
-    VIP_DAILY_LIMIT: int = 1000
-    TRIAL_DAYS: int = 3
-    MAX_FILE_SIZE_MB: int = 20
-    BATCH_MAX_FILES: int = 10
-
-    # AI
-    REMBG_MODEL: str = "u2net"
-    UPSCALER_MODEL: str = "RealESRGAN_x4plus"
-    ENABLE_GFPGAN: bool = True
-    ENABLE_ENHANCEMENT: bool = True
-
-    # Storage
-    STORAGE_DIR: Path = Path("./storage")
-    TEMP_DIR: Path = Path("./tmp")
-    CACHE_DIR: Path = Path("./cache")
-    CACHE_TTL: int = 3600
-    LOG_DIR: Path = Path("./logs")
-
-    # Payments
-    ENABLE_STARS: bool = True
-    ENABLE_CLICK: bool = False
-    ENABLE_PAYME: bool = False
-    ENABLE_STRIPE: bool = False
-    ENABLE_PAYPAL: bool = False
-    ENABLE_CRYPTO: bool = False
-    CLICK_MERCHANT_ID: str = ""
-    CLICK_SECRET_KEY: str = ""
-    PAYME_MERCHANT_ID: str = ""
-    PAYME_SECRET_KEY: str = ""
-    STRIPE_SECRET_KEY: str = ""
-    STRIPE_WEBHOOK_SECRET: str = ""
-    PAYPAL_CLIENT_ID: str = ""
-    PAYPAL_SECRET: str = ""
-    CRYPTO_WALLET_BTC: str = ""
-    CRYPTO_WALLET_ETH: str = ""
-    CRYPTO_WALLET_USDT: str = ""
-
-    # Prices
-    PRICE_MONTHLY_STARS: int = 500
-    PRICE_YEARLY_STARS: int = 5000
-    PRICE_LIFETIME_STARS: int = 15000
-    PRICE_MONTHLY_USD: int = 499
-    PRICE_YEARLY_USD: int = 4999
-    PRICE_LIFETIME_USD: int = 14999
-
-    # Referral
-    REFERRAL_BONUS_FREE_DAYS: int = 3
-    REFERRAL_BONUS_PREMIUM_PERCENT: int = 20
-
-    # Monitoring
-    SENTRY_DSN: str = ""
-
-    @field_validator("ADMIN_IDS", "REQUIRED_CHANNELS", mode="before")
-    @classmethod
-    def _split_csv(cls, v):
-        if isinstance(v, str):
-            if not v:
-                return []
-            return [item.strip() for item in v.split(",") if item.strip()]
-        return v
+    PREMIUM_DAILY_LIMIT: int = 1000
 
     @field_validator("ADMIN_IDS", mode="before")
     @classmethod
-    def _to_ints(cls, v):
-        if isinstance(v, list):
+    def _parse_admin_ids(cls, v):
+        if isinstance(v, str):
+            return [int(x.strip()) for x in v.split(",") if x.strip().isdigit()]
+        if isinstance(v, (list, tuple)):
             return [int(x) for x in v]
-        return v
+        return v or []
 
     @property
     def is_production(self) -> bool:
-        return self.ENVIRONMENT == "production"
-
-    @property
-    def cors_origins(self) -> list[str]:
-        if self.API_CORS_ORIGINS == "*":
-            return ["*"]
-        return [o.strip() for o in self.API_CORS_ORIGINS.split(",") if o.strip()]
+        return self.ENVIRONMENT.lower() in ("production", "prod")
 
 
-@lru_cache(maxsize=1)
+@lru_cache
 def get_settings() -> Settings:
     return Settings()
 
 
 settings = get_settings()
+
+__all__ = ["Settings", "get_settings", "settings"]
